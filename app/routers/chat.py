@@ -33,7 +33,21 @@ async def ask_question(question: Question):
         # return Answer(answer=answer)
 
         # Mock response for demonstration purposes
-        answer = "This is a mock answer to your question."
-        return Answer(answer=answer)
+        # answer = "This is a mock answer to your question."
+        # return Answer(answer=answer)
+
+        query_engine = llm_service.get_query_engine()
+        streaming_response = query_engine.query(
+            question.question,
+        )
+
+        # collected_text = ""
+        # async for text in streaming_response.response_gen:
+        #     collected_text += text
+
+        streaming_response.print_response_stream()
+
+        return Answer(answer="model works")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

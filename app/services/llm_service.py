@@ -1,5 +1,6 @@
 import torch
-from llama_index.core import StorageContext, load_index_from_storage
+from llama_index.core import Settings, StorageContext, load_index_from_storage
+from llama_index.core.query_engine import BaseQueryEngine
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.llama_cpp import LlamaCPP
 
@@ -70,11 +71,13 @@ def load_index(storage_context=None):
     return load_index_from_storage(storage_context=storage_context)
 
 
-def create_query_engine(index):
+from llama_index.core.indices.base import BaseIndex
+from llama_index.core.query_engine import BaseQueryEngine
+
+
+def create_query_engine(index: "BaseIndex") -> BaseQueryEngine:
     if index is None:
         raise ValueError("Index must be provided")
-
-    from llama_index.core import Settings
 
     # Set global settings before using
     Settings.chunk_size = 3840
@@ -83,7 +86,55 @@ def create_query_engine(index):
     Settings.embed_model = create_embedding_model()
 
     return index.as_query_engine(
+        streaming=True,
         similarity_top_k=3,
         response_mode="tree_summarize",
         verbose=True,
     )
+
+
+def create_llm_service():
+    device = get_device()
+
+    # ✅ Set embedding and LLM models BEFORE loading index
+    Settings.embed_model = create_embedding_model()
+    Settings.llm = create_llm_model()
+    Settings.chunk_size = 3840
+    Settings.chunk_overlap = 256
+
+    storage_context = load_storage_context()
+    index = load_index(storage_context=storage_context)
+    query_engine = create_query_engine(index)
+
+    return {
+        "device": device,
+        "storage_context": storage_context,
+        "index": index,
+        "query_engine": query_engine,
+    }
+
+
+def get_llm_service():
+    llm_service = create_llm_service()
+    print("LLM service created successfully.")
+    return llm_service
+
+
+def get_query_engine() -> BaseQueryEngine:
+    llm_service = get_llm_service()
+    query_engine = llm_service["query_engine"]
+    if query_engine is None:
+        raise ValueError("Query engine is not available")
+    return query_engine
+
+
+def qa(query_engine, query):
+    if query_engine is None:
+        raise ValueError("Query engine must be provided")
+    if not query:
+        raise ValueError("Query cannot be empty")
+
+    print(f"Running query: {query}")
+    response = query_engine.query(query)
+    print(f"Response: {response}")
+    return response
