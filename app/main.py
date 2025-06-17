@@ -2,11 +2,14 @@ from typing import Union
 
 from fastapi import FastAPI
 
+from llm import display_device
+
 app = FastAPI()
 
 
 @app.get("/")
 def read_root():
+    display_device()
     return {"Hello": "World"}
 
 
