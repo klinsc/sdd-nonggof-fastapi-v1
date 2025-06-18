@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Callable, List
+from typing import Callable, List, Literal
 
 import torch
 from langchain_core.documents import Document  # Added for creating Document objects
@@ -10,6 +10,7 @@ from llama_index.core import (
     VectorStoreIndex,
     load_index_from_storage,
 )
+from llama_index.core.chat_engine.types import BaseChatEngine, ChatMode
 from llama_index.core.query_engine import BaseQueryEngine
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -320,7 +321,9 @@ def get_doc():
     return docs
 
 
-def ask_question(query: str, docs: List[Document]):
+def get_query_engine(
+    docs: List[Document], engine_type: Literal["as_chat_engine", "as_query_engine"]
+):
     def messages_to_prompt(messages):
         prompt = ""
         for message in messages:
@@ -369,24 +372,36 @@ def ask_question(query: str, docs: List[Document]):
         for doc in langchain_documents
     ]
 
-    # index = VectorStoreIndex.from_documents(documents ,show_progress=True)
-    index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
+    persist_dir = "./storage"
+    index = None
 
-    query_engine = index.as_query_engine(
+    if os.path.exists(persist_dir) and os.listdir(persist_dir):
+        # rebuild storage context
+        storage_context = StorageContext.from_defaults(persist_dir="storage")
+        # load index
+        index = load_index_from_storage(storage_context, index_id="vector_index")
+    else:
+        # Create new index and persist it
+        index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
+        index.set_index_id("vector_index")
+        index.storage_context.persist("./storage")
+
+    if engine_type == "as_chat_engine":
+        return index.as_chat_engine(
+            similarity_top_k=1,
+            chat_mode=ChatMode.CONDENSE_QUESTION,
+            # verbose=True,
+            streaming=True,
+            # text_qa_template=prompt_template,
+        )
+
+    return index.as_query_engine(
         similarity_top_k=1,
+        chat_mode=ChatMode.CONDENSE_QUESTION,
         # verbose=True,
         streaming=True,
         # text_qa_template=prompt_template,
     )
-
-    response = query_engine.query(
-        query,
-        # response_mode="tree_summarize",
-        # response_mode="tree_summarize",
-    )
-    print(f"Response: {response}")
-
-    return response
 
 
 def build_llm():
@@ -403,10 +418,15 @@ def build_llm():
         print("No documents found. Exiting LLM build process.")
         return
 
-    ask_question(
-        "สร้างสถานีไฟฟ้าลำลูกกา 3",
-        docs,
-    )
+    engine = get_query_engine(docs, engine_type="as_query_engine")
+    if not isinstance(engine, BaseQueryEngine) and not isinstance(
+        engine, BaseChatEngine
+    ):
+        print("Failed to create a valid query engine. Exiting LLM build process.")
+        return
+
+    print("LLM build process completed successfully.")
+    return engine
 
 
-build_llm()
+query_engine = build_llm()
