@@ -1,18 +1,23 @@
+import json
 import os
-from typing import Callable
+from typing import Callable, List
+
 import torch
-from llama_index.core import Settings, StorageContext, load_index_from_storage
+from langchain_core.documents import Document  # Added for creating Document objects
+from llama_index.core import (
+    Settings,
+    StorageContext,
+    VectorStoreIndex,
+    load_index_from_storage,
+)
 from llama_index.core.query_engine import BaseQueryEngine
+from llama_index.core.schema import Document as LlamaDocument
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.llama_cpp import LlamaCPP
-from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
 from openai import OpenAI
+from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
+
 from app.config import VarSettings
-import json
-from langchain_core.documents import Document  # Added for creating Document objects
-from typing import List
-from llama_index.core.schema import Document as LlamaDocument
-from llama_index.core import VectorStoreIndex
 
 
 def get_doc():
@@ -368,24 +373,24 @@ def build_llm():
     Settings.llm = llm
     Settings.embed_model = embed_model
 
-    # langchain_documents = docs
-    # llama_docs = [
-    #     LlamaDocument(text=doc.page_content, metadata=doc.metadata)
-    #     for doc in langchain_documents
-    # ]
+    langchain_documents = docs
+    llama_docs = [
+        LlamaDocument(text=doc.page_content, metadata=doc.metadata)
+        for doc in langchain_documents
+    ]
 
-    # # index = VectorStoreIndex.from_documents(documents ,show_progress=True)
-    # index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
+    # index = VectorStoreIndex.from_documents(documents ,show_progress=True)
+    index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
 
-    # query_engine = index.as_query_engine(
-    #     similarity_top_k=1,
-    #     # verbose=True,
-    #     streaming=True,
-    #     # text_qa_template=prompt_template,
-    # )
+    query_engine = index.as_query_engine(
+        similarity_top_k=1,
+        # verbose=True,
+        streaming=True,
+        # text_qa_template=prompt_template,
+    )
 
-    # response = query_engine.query("สถานีไฟฟ้ามวกเหล็กมีค่าใช้จ่ายเท่าไหร่")
-    # print(response)
+    response = query_engine.query("สถานีไฟฟ้ามวกเหล็กมีค่าใช้จ่ายเท่าไหร่")
+    print(response)
 
     pass
 
