@@ -7,10 +7,12 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.llama_cpp import LlamaCPP
 from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
 from openai import OpenAI
-from app.config import Settings
+from app.config import VarSettings
 import json
 from langchain_core.documents import Document  # Added for creating Document objects
 from typing import List
+from llama_index.core.schema import Document as LlamaDocument
+from llama_index.core import VectorStoreIndex
 
 
 def get_doc():
@@ -105,7 +107,7 @@ def get_doc():
 
             openai = OpenAI(
                 base_url="https://api.opentyphoon.ai/v1",
-                api_key=Settings.TYHOON_API_KEY,
+                api_key=VarSettings.TYHOON_API_KEY,
             )
 
             # Ensure messages are typed as List[ChatCompletionMessageParam]
@@ -323,8 +325,69 @@ def build_llm():
         print("Using CPU for LLM processing.")
 
     docs = get_doc()
-    print(f"Total documents loaded: {len(docs)}")
+
+    def messages_to_prompt(messages):
+        prompt = ""
+        for message in messages:
+            if message.role == "system":
+                prompt += f"<|start_header_id|>system<|end_header_id|>{message.content}<|eot_id|>\n"
+            elif message.role == "user":
+                prompt += f"<|start_header_id|>user<|end_header_id|>{message.content}<|eot_id|>\n"
+            elif message.role == "assistant":
+                prompt += f"<|start_header_id|>assistant<|end_header_id|>{message.content}<|eot_id|>\n"
+
+        # add final assistant prompt
+        prompt = prompt + "<|start_header_id|>assistant<|end_header_id|><|eot_id|>\n"
+        return prompt
+
+    def completion_to_prompt(completion):
+        return f"<|start_header_id|>system<|end_header_id|><|eot_id|>\n<|start_header_id|>user<|end_header_id|>{completion}<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n"
+
+    llm = LlamaCPP(
+        model_url="https://huggingface.co/scb10x/typhoon2.1-gemma3-4b-gguf/resolve/main/typhoon2.1-gemma3-4b-q4_k_m.gguf",
+        model_path=None,
+        temperature=0.1,
+        context_window=8192,
+        max_new_tokens=1024,  # อาจจะตอบเพิ่มออกมาอีก 1024 bytes
+        generate_kwargs={},
+        model_kwargs={
+            "repetition-penalty": 1.4,
+            "no_repeat_ngram_size": 4,
+            # "response_format": { "type": "json_object" },
+            "n_gpu_layers": -1,
+        },
+        # model_kwargs={"n_gpu_layers": 33},
+        messages_to_prompt=messages_to_prompt,
+        completion_to_prompt=completion_to_prompt,
+        verbose=True,
+    )
+
+    embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-m3")
+    Settings.chunk_size = 3840
+    Settings.chunk_overlap = 256
+    Settings.llm = llm
+    Settings.embed_model = embed_model
+
+    # langchain_documents = docs
+    # llama_docs = [
+    #     LlamaDocument(text=doc.page_content, metadata=doc.metadata)
+    #     for doc in langchain_documents
+    # ]
+
+    # # index = VectorStoreIndex.from_documents(documents ,show_progress=True)
+    # index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
+
+    # query_engine = index.as_query_engine(
+    #     similarity_top_k=1,
+    #     # verbose=True,
+    #     streaming=True,
+    #     # text_qa_template=prompt_template,
+    # )
+
+    # response = query_engine.query("สถานีไฟฟ้ามวกเหล็กมีค่าใช้จ่ายเท่าไหร่")
+    # print(response)
 
     pass
+
 
 build_llm()
