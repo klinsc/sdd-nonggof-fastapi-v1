@@ -320,17 +320,7 @@ def get_doc():
     return docs
 
 
-def build_llm():
-    print("Building LLM...")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cuda":
-        print("Using GPU for LLM processing.")
-    else:
-        print("Using CPU for LLM processing.")
-
-    docs = get_doc()
-
+def ask_question(query: str, docs: List[Document]):
     def messages_to_prompt(messages):
         prompt = ""
         for message in messages:
@@ -389,10 +379,34 @@ def build_llm():
         # text_qa_template=prompt_template,
     )
 
-    response = query_engine.query("สถานีไฟฟ้ามวกเหล็กมีค่าใช้จ่ายเท่าไหร่")
-    print(response)
+    response = query_engine.query(
+        query,
+        # response_mode="tree_summarize",
+        # response_mode="tree_summarize",
+    )
+    print(f"Response: {response}")
 
-    pass
+    return response
+
+
+def build_llm():
+    print("Building LLM...")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        print("Using GPU for LLM processing.")
+    else:
+        print("Using CPU for LLM processing.")
+
+    docs = get_doc()
+    if not docs:
+        print("No documents found. Exiting LLM build process.")
+        return
+
+    ask_question(
+        "สร้างสถานีไฟฟ้าลำลูกกา 3",
+        docs,
+    )
 
 
 build_llm()
