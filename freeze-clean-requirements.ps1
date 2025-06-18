@@ -1,1 +1,0 @@
-uv pip freeze | findstr /V "file:///" | findstr /V "-e" > requirements.txt
