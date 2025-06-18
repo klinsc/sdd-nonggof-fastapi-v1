@@ -1,4 +1,8 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from llama_index.core.query_engine import BaseQueryEngine
 from pydantic import BaseModel
 
 from app.services import llm_service
@@ -12,40 +16,45 @@ router = APIRouter(
 
 class Question(BaseModel):
     question: str
-    context: str
 
 
 class Answer(BaseModel):
     answer: str
 
 
+async def answer_streamer(response_gen):
+    # Assume response_gen is an async or sync generator yielding text chunks
+    for chunk in response_gen:
+        yield chunk
+        await asyncio.sleep(0)  # Yield control to event loop
+
+
 @router.post("/ask", response_model=Answer)
 async def ask_question(question: Question):
     """
-    Ask a question with context and get an answer.
+    Ask a question and get an answer.
     """
-    if not question.question or not question.context:
-        raise HTTPException(status_code=400, detail="Question and context are required")
+    if not question.question:
+        raise HTTPException(status_code=400, detail="Question is required")
 
     try:
-        # TODO
-        # answer = llm_service.answer_question(question.question, question.context)
-        # return Answer(answer=answer)
+        query_engine = llm_service.query_engine
+        if not query_engine:
+            raise HTTPException(status_code=500, detail="LLM service is not available")
 
-        # Mock response for demonstration purposes
-        # answer = "This is a mock answer to your question."
-        # return Answer(answer=answer)
+        if isinstance(query_engine, BaseQueryEngine):
+            streaming_response = query_engine.query(
+                question.question,
+            )
+            if streaming_response is None:
+                raise HTTPException(
+                    status_code=500, detail="Failed to get a response from the model"
+                )
 
-        query_engine = llm_service.get_query_engine()
-        streaming_response = query_engine.query(
-            question.question,
-        )
-
-        # collected_text = ""
-        # async for text in streaming_response.response_gen:
-        #     collected_text += text
-
-        streaming_response.print_response_stream()
+            return StreamingResponse(
+                answer_streamer(streaming_response.response_gen),  # type: ignore
+                media_type="text/plain",
+            )
 
         return Answer(answer="model works")
 
