@@ -343,6 +343,8 @@ def get_query_engine(
 
     llm = LlamaCPP(
         model_url="https://huggingface.co/scb10x/typhoon2.1-gemma3-4b-gguf/resolve/main/typhoon2.1-gemma3-4b-q4_k_m.gguf",
+        # ? It takes too long to inference using 12B model, around ~2.8min used with 5060ti 16GB
+        # ? model_url="https://huggingface.co/scb10x/typhoon2.1-gemma3-12b-gguf/resolve/main/typhoon2.1-gemma3-12b-q4_k_m.gguf",
         model_path=None,
         temperature=0.1,
         context_window=8192,
@@ -357,7 +359,7 @@ def get_query_engine(
         # model_kwargs={"n_gpu_layers": 33},
         messages_to_prompt=messages_to_prompt,
         completion_to_prompt=completion_to_prompt,
-        verbose=True,
+        # verbose=True,
     )
 
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-m3")
