@@ -24,8 +24,14 @@ class Answer(BaseModel):
 
 async def answer_streamer(response_gen):
     # Assume response_gen is an async or sync generator yielding text chunks
+    texts = ""
     for chunk in response_gen:
+        if "<|eot_id|>" in texts:
+            break  # Stop if end of text marker is found
+
+        texts += chunk
         yield chunk
+
         await asyncio.sleep(0)  # Yield control to event loop
 
 
