@@ -6,6 +6,7 @@ import torch
 from langchain_core.documents import Document  # Added for creating Document objects
 from llama_index.core import (
     Settings,
+    SimpleDirectoryReader,
     StorageContext,
     VectorStoreIndex,
     load_index_from_storage,
@@ -19,6 +20,8 @@ from openai import OpenAI
 from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
 
 from app.config import VarSettings
+
+dataset_name = "standards"  # The dataset name for the documents
 
 
 def get_doc():
@@ -63,6 +66,40 @@ def get_doc():
             reader = PdfReader(f)
             return len(reader.pages)
 
+    def get_response(PROMPT: str, image_base64: str):
+        openai = OpenAI(
+            base_url="https://api.opentyphoon.ai/v1",
+            api_key=VarSettings.TYHOON_API_KEY,
+        )
+
+        # Ensure messages are typed as List[ChatCompletionMessageParam]
+        from openai.types.chat import ChatCompletionUserMessageParam
+
+        typed_messages: list[ChatCompletionUserMessageParam] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                    },
+                ],
+            }
+        ]
+
+        return openai.chat.completions.create(
+            model="typhoon-ocr-preview",
+            # messages=messages,
+            messages=typed_messages,
+            max_tokens=16384,
+            temperature=0.1,
+            top_p=0.6,
+            extra_body={
+                "repetition_penalty": 1.2,
+            },
+        )
+
     def extract_text_and_image_from_pdf(
         original_file_path, output_json_path, markdown=True
     ):
@@ -80,6 +117,9 @@ def get_doc():
 
         # Iterate through each page in the PDF
         for page_num in range(total_pages):
+            # Log the current page being processed
+            print(f"Processing page {page_num + 1} of {total_pages}...")
+
             page = page_num + 1  # Page numbers are 1-based in the prompt
 
             # Render the first page to base64 PNG and then load it into a PIL image.
@@ -96,55 +136,10 @@ def get_doc():
             prompt_template_fn = get_prompt(task_type)
             PROMPT = prompt_template_fn(anchor_text)
 
-            # messages = [
-            #     {
-            #         "role": "user",
-            #         "content": [
-            #             {"type": "text", "text": PROMPT},
-            #             {
-            #                 "type": "image_url",
-            #                 "image_url": {
-            #                     "url": f"data:image/png;base64,{image_base64}"
-            #                 },
-            #             },
-            #         ],
-            #     }
-            # ]
+            # Get the response from the OpenAI API
+            response = get_response(PROMPT, image_base64)
 
-            openai = OpenAI(
-                base_url="https://api.opentyphoon.ai/v1",
-                api_key=VarSettings.TYHOON_API_KEY,
-            )
-
-            # Ensure messages are typed as List[ChatCompletionMessageParam]
-            from openai.types.chat import ChatCompletionUserMessageParam
-
-            typed_messages: list[ChatCompletionUserMessageParam] = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{image_base64}"
-                            },
-                        },
-                    ],
-                }
-            ]
-
-            response = openai.chat.completions.create(
-                model="typhoon-ocr-preview",
-                # messages=messages,
-                messages=typed_messages,
-                max_tokens=16384,
-                temperature=0.1,
-                top_p=0.6,
-                extra_body={
-                    "repetition_penalty": 1.2,
-                },
-            )
+            # Get the text output from the response
             text_output = response.choices[0].message.content
             print(text_output)
 
@@ -173,9 +168,9 @@ def get_doc():
 
             json.dump(final_output, f, ensure_ascii=False, indent=4)
 
-    pdf_directory = "data/sdd-data"
+    pdf_directory = f"data/{dataset_name}"  # Directory containing the PDF files
 
-    ocr_output_directory = "data/sdd-data_json"  # Create a directory to store OCR'd JSON files (containing Markdown)
+    ocr_output_directory = f"data/{dataset_name}_json"  # Create a directory to store OCR'd JSON files (containing Markdown)
     os.makedirs(ocr_output_directory, exist_ok=True)
 
     problematic_files = [
@@ -321,6 +316,12 @@ def get_doc():
     return docs
 
 
+def get_texted_doc():
+    pdf_directory = f"data/{dataset_name}"
+
+    return SimpleDirectoryReader(pdf_directory).load_data()
+
+
 def get_query_engine(
     docs: List[Document], engine_type: Literal["as_chat_engine", "as_query_engine"]
 ):
@@ -345,7 +346,6 @@ def get_query_engine(
         model_url="https://huggingface.co/scb10x/typhoon2.1-gemma3-4b-gguf/resolve/main/typhoon2.1-gemma3-4b-q4_k_m.gguf",
         # ? It takes too long to inference using 12B model, around ~2.8min used with 5060ti 16GB
         # ? model_url="https://huggingface.co/scb10x/typhoon2.1-gemma3-12b-gguf/resolve/main/typhoon2.1-gemma3-12b-q4_k_m.gguf",
-        model_path=None,
         temperature=0.1,
         context_window=8192,
         max_new_tokens=1024,  # อาจจะตอบเพิ่มออกมาอีก 1024 bytes
@@ -359,7 +359,7 @@ def get_query_engine(
         # model_kwargs={"n_gpu_layers": 33},
         messages_to_prompt=messages_to_prompt,
         completion_to_prompt=completion_to_prompt,
-        # verbose=True,
+        verbose=True,
     )
 
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-m3")
@@ -369,10 +369,10 @@ def get_query_engine(
     Settings.embed_model = embed_model
 
     langchain_documents = docs
-    llama_docs = [
-        LlamaDocument(text=doc.page_content, metadata=doc.metadata)
-        for doc in langchain_documents
-    ]
+    # llama_docs = [
+    #     LlamaDocument(text=doc.page_content, metadata=doc.metadata)
+    #     for doc in langchain_documents
+    # ]
 
     persist_dir = "./storage"
     index = None
@@ -381,11 +381,11 @@ def get_query_engine(
         # rebuild storage context
         storage_context = StorageContext.from_defaults(persist_dir="storage")
         # load index
-        index = load_index_from_storage(storage_context, index_id="vector_index")
+        index = load_index_from_storage(storage_context, index_id=dataset_name)
     else:
         # Create new index and persist it
-        index = VectorStoreIndex.from_documents(llama_docs, show_progress=True)
-        index.set_index_id("vector_index")
+        index = VectorStoreIndex.from_documents(langchain_documents, show_progress=True)
+        index.set_index_id(dataset_name)
         index.storage_context.persist("./storage")
 
     if engine_type == "as_chat_engine":
@@ -415,7 +415,7 @@ def build_llm():
     else:
         print("Using CPU for LLM processing.")
 
-    docs = get_doc()
+    docs = get_texted_doc()
     if not docs:
         print("No documents found. Exiting LLM build process.")
         return
