@@ -1,11 +1,23 @@
+import json
 import os
 from typing import Callable
 
+import torch
 from dotenv import load_dotenv
-
-load_dotenv()
+from huggingface_hub import login
+from langchain.embeddings.base import Embeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document  # Added for creating Document objects
 from openai import OpenAI
+from sentence_transformers import SentenceTransformer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.utils.quantization_config import BitsAndBytesConfig
 from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
+
+# ! from langchain_community.document_loaders import PyPDFLoader # This import might become unused or replaced
+load_dotenv()
+
 
 # Define the system prompts for OCR tasks
 PROMPTS_SYS = {
@@ -146,12 +158,6 @@ def extract_text_and_image_from_pdf(
 
         json.dump(final_output, f, ensure_ascii=False, indent=4)
 
-
-# ! from langchain_community.document_loaders import PyPDFLoader # This import might become unused or replaced
-import json
-import os
-
-from langchain_core.documents import Document  # Added for creating Document objects
 
 pdf_directory = "data/sdd-data"
 # Create a directory to store OCR'd JSON files (containing Markdown)
@@ -325,8 +331,6 @@ docs = [clean_document(doc) for doc in docs]
 
 """## Document Chunk and Overlab"""
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
 text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
     chunk_size=3000, chunk_overlap=1000
 )
@@ -335,9 +339,6 @@ len(texts)
 
 # print(len(texts[0].page_content))
 # print(texts[0].page_content)
-
-from langchain.embeddings.base import Embeddings
-from sentence_transformers import SentenceTransformer
 
 
 class CustomHuggingFaceEmbeddings(Embeddings):
@@ -358,8 +359,6 @@ embeddings = CustomHuggingFaceEmbeddings(model_name="BAAI/bge-m3")
 embeddings.model.to("cuda")  # Move the model to GPU if available
 
 
-from langchain_community.vectorstores import Chroma
-
 # Add to vectorDB
 vectorstore = Chroma.from_documents(
     documents=texts,
@@ -367,9 +366,6 @@ vectorstore = Chroma.from_documents(
     embedding=embeddings,
 )
 
-
-import torch
-from huggingface_hub import login
 
 # Check if CUDA is available and set the device accordingly
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -393,10 +389,6 @@ if device != "cuda":
 hf_token = os.getenv("HF_TOKEN")
 login(token=hf_token)
 
-
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.utils.quantization_config import BitsAndBytesConfig
 
 model_id = "scb10x/typhoon2.1-gemma3-4b"
 
