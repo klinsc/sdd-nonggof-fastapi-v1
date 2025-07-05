@@ -353,19 +353,19 @@ class CustomHuggingFaceEmbeddings(Embeddings):
         return embedding.tolist()[0]
 
 
-# embeddings = CustomHuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+embeddings = CustomHuggingFaceEmbeddings(model_name="BAAI/bge-m3")
 
-# embeddings.model.to("cuda")  # Move the model to GPU if available
+embeddings.model.to("cuda")  # Move the model to GPU if available
 
 
-# from langchain_community.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
 
-# # Add to vectorDB
-# vectorstore = Chroma.from_documents(
-#     documents=texts,
-#     collection_name="rag-chroma",
-#     embedding=embeddings,
-# )
+# Add to vectorDB
+vectorstore = Chroma.from_documents(
+    documents=texts,
+    collection_name="rag-chroma",
+    embedding=embeddings,
+)
 
 
 import torch
