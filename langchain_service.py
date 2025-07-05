@@ -10,10 +10,12 @@ from langchain.embeddings.base import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document  # Added for creating Document objects
+from langchain_core.prompts import PromptTemplate
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.utils.quantization_config import BitsAndBytesConfig
+
+# from transformers.utils.quantization_config import BitsAndBytesConfig
 from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
 
 from app.config import VarSettings
@@ -371,75 +373,223 @@ def embed_text(texts: list[Document]) -> Chroma:
     return vectorstore
 
 
-embed_text(texts)
+vector_store = embed_text(texts)
 
 
-def build_llm():
-    # Check if CUDA is available and set the device accordingly
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+# def build_llm()-> AutoModelForCausalLM:
+#     # Check if CUDA is available and set the device accordingly
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
-    torch.set_float32_matmul_precision("high")
+#     # TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+#     torch.set_float32_matmul_precision("high")
 
-    # Check if MPS (Metal Performance Shaders) is available for Apple Silicon Macs
-    if torch.backends.mps.is_available():
-        device = "mps"
-    print(device)
+#     # Check if MPS (Metal Performance Shaders) is available for Apple Silicon Macs
+#     if torch.backends.mps.is_available():
+#         device = "mps"
+#     print(device)
 
-    # Set environment variable to ensure CUDA errors are raised immediately
-    import os
+#     # Set environment variable to ensure CUDA errors are raised immediately
+#     import os
 
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+#     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-    if device != "cuda":
-        raise NotImplementedError
+#     if device != "cuda":
+#         raise NotImplementedError
 
-    hf_token = os.getenv("HF_TOKEN")
-    login(token=hf_token)
+#     hf_token = os.getenv("HF_TOKEN")
+#     login(token=hf_token)
 
-    model_id = "scb10x/typhoon2.1-gemma3-4b"
+#     model_id = "scb10x/typhoon2.1-gemma3-4b"
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+#     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    # bnb_config = BitsAndBytesConfig(
-    #     load_in_8bit=True,
-    #     bnb_4bit_quant_type="nf4",  # or "fp4"
-    #     bnb_4bit_compute_dtype=torch.bfloat16,
-    #     bnb_4bit_use_double_quant=True,
-    # )
+#     # bnb_config = BitsAndBytesConfig(
+#     #     load_in_8bit=True,
+#     #     bnb_4bit_quant_type="nf4",  # or "fp4"
+#     #     bnb_4bit_compute_dtype=torch.bfloat16,
+#     #     bnb_4bit_use_double_quant=True,
+#     # )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+#     model = AutoModelForCausalLM.from_pretrained(
+#         model_id,
+#         torch_dtype=torch.bfloat16,
+#         device_map="auto",
+#     )
+#     print(model)
+
+#     # Example usage of the model with a prompt
+#     messages = [
+#         {
+#             "role": "system",
+#             "content": "You are a male AI assistant named Typhoon created by SCB 10X to be helpful, harmless, and honest. Typhoon is happy to help with analysis, question answering, math, coding, creative writing, teaching, role-play, general discussion, and all sorts of other tasks. Typhoon responds directly to all human messages without unnecessary affirmations or filler phrases like “Certainly!”, “Of course!”, “Absolutely!”, “Great!”, “Sure!”, etc. Specifically, Typhoon avoids starting responses with the word “Certainly” in any way. Typhoon follows this information in all languages, and always responds to the user in the language they use or request. Typhoon is now being connected with a human. Write in fluid, conversational prose, Show genuine interest in understanding requests, Express appropriate emotions and empathy. Also showing information in term that is easy to understand and visualized.",
+#         },
+#         {"role": "user", "content": "ขอสูตรไก่ย่าง"},
+#     ]
+
+#     input_ids = tokenizer.apply_chat_template(
+#         messages,
+#         add_generation_prompt=True,
+#         return_tensors="pt",
+#         enable_thinking=False,  # Switches between thinking and non-thinking modes. Default is False.
+#     ).to(model.device)
+
+#     outputs = model.generate(
+#         input_ids,
+#         max_new_tokens=512,
+#         do_sample=True,
+#         temperature=0.6,
+#         top_p=0.95,
+#     )
+#     response = outputs[0][input_ids.shape[-1] :]
+#     print(tokenizer.decode(response, skip_special_tokens=True))
+
+#     return model
+
+
+# llm = build_llm()
+
+
+# def build_rag():
+#     prompt = PromptTemplate(
+#         template="""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+#         You are an assistant for question-answering tasks.
+#         Use the following pieces of retrieved context to answer the question.
+#         If you don't know the answer, just say that you don't know.
+#         Use three sentences maximum and keep the answer concise.
+#         Respond **only in Thai language**.
+#         <|eot_id|><|start_header_id|>user<|end_header_id|>
+#         Question: {question}
+#         Context: {context}
+#         Answer:
+#         <|eot_id|><|start_header_id|>assistant<|end_header_id|>""",
+#         input_variables=["question", "context"],
+#     )
+
+#     from langchain.chains import RetrievalQA
+
+#     qa_chain = RetrievalQA.from_chain_type(
+#         llm=llm,
+#         chain_type="stuff",
+#         retriever=vectorstore.as_retriever(
+#             search_kwargs={"k": 2}
+#         ),  # k=2 คือค้นหา2ที่ หรือ หน้า
+#         return_source_documents=True,
+#         chain_type_kwargs={"prompt": prompt},
+#         verbose=True,
+#     )
+
+#     return qa_chain
+
+
+# qa_chain = build_rag()
+# result = qa_chain("งานออกแบบสถานีไฟฟ้าคลองหนึ่งมีราคาประมาณเท่าไหร่")
+
+
+import getpass
+import os
+
+if not os.environ.get("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = getpass.getpass("Enter API key for OpenAI: ")
+
+from langchain.chat_models import init_chat_model
+
+llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+from langchain_core.tools import tool
+
+
+@tool(response_format="content_and_artifact")
+def retrieve(query: str):
+    """Retrieve information related to a query."""
+    retrieved_docs = vector_store.similarity_search(query, k=2)
+    serialized = "\n\n".join(
+        (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
+        for doc in retrieved_docs
     )
-    print(model)
+    return serialized, retrieved_docs
 
-    # Example usage of the model with a prompt
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a male AI assistant named Typhoon created by SCB 10X to be helpful, harmless, and honest. Typhoon is happy to help with analysis, question answering, math, coding, creative writing, teaching, role-play, general discussion, and all sorts of other tasks. Typhoon responds directly to all human messages without unnecessary affirmations or filler phrases like “Certainly!”, “Of course!”, “Absolutely!”, “Great!”, “Sure!”, etc. Specifically, Typhoon avoids starting responses with the word “Certainly” in any way. Typhoon follows this information in all languages, and always responds to the user in the language they use or request. Typhoon is now being connected with a human. Write in fluid, conversational prose, Show genuine interest in understanding requests, Express appropriate emotions and empathy. Also showing information in term that is easy to understand and visualized.",
-        },
-        {"role": "user", "content": "ขอสูตรไก่ย่าง"},
+
+from langchain_core.messages import SystemMessage
+from langgraph.graph import MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode
+
+graph_builder = StateGraph(MessagesState)
+
+
+# Step 1: Generate an AIMessage that may include a tool-call to be sent.
+def query_or_respond(state: MessagesState):
+    """Generate tool call for retrieval or respond."""
+    llm_with_tools = llm.bind_tools([retrieve])
+    response = llm_with_tools.invoke(state["messages"])
+    # MessagesState appends messages to state instead of overwriting
+    return {"messages": [response]}
+
+
+# Step 2: Execute the retrieval.
+tools = ToolNode([retrieve])
+
+
+# Step 3: Generate a response using the retrieved content.
+def generate(state: MessagesState):
+    """Generate answer."""
+    # Get generated ToolMessages
+    recent_tool_messages = []
+    for message in reversed(state["messages"]):
+        if message.type == "tool":
+            recent_tool_messages.append(message)
+        else:
+            break
+    tool_messages = recent_tool_messages[::-1]
+
+    # Format into prompt
+    docs_content = "\n\n".join(doc.content for doc in tool_messages)
+    system_message_content = (
+        "You are an assistant for question-answering tasks. "
+        "Use the following pieces of retrieved context to answer "
+        "the question. If you don't know the answer, say that you "
+        "don't know. Use three sentences maximum and keep the "
+        "answer concise. Respond **only in Thai language**."
+        "\n\n"
+        f"{docs_content}"
+    )
+    conversation_messages = [
+        message
+        for message in state["messages"]
+        if message.type in ("human", "system")
+        or (message.type == "ai" and not message.tool_calls)
     ]
+    prompt = [SystemMessage(system_message_content)] + conversation_messages
 
-    input_ids = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        return_tensors="pt",
-        enable_thinking=False,  # Switches between thinking and non-thinking modes. Default is False.
-    ).to(model.device)
-
-    outputs = model.generate(
-        input_ids,
-        max_new_tokens=512,
-        do_sample=True,
-        temperature=0.6,
-        top_p=0.95,
-    )
-    response = outputs[0][input_ids.shape[-1] :]
-    print(tokenizer.decode(response, skip_special_tokens=True))
+    # Run
+    response = llm.invoke(prompt)
+    return {"messages": [response]}
 
 
-build_llm()
+from langgraph.graph import END
+from langgraph.prebuilt import ToolNode, tools_condition
+
+graph_builder.add_node(query_or_respond)
+graph_builder.add_node(tools)
+graph_builder.add_node(generate)
+
+graph_builder.set_entry_point("query_or_respond")
+graph_builder.add_conditional_edges(
+    "query_or_respond",
+    tools_condition,
+    {END: END, "tools": "tools"},
+)
+graph_builder.add_edge("tools", "generate")
+graph_builder.add_edge("generate", END)
+
+graph = graph_builder.compile()
+
+
+from langchain_core.messages import HumanMessage
+
+input_message = "ราคางานออกแบบสถานีไฟฟ้าคลองหนึ่งประมาณเท่าไหร่"
+
+for step in graph.stream(
+    {"messages": [HumanMessage(content=input_message)]},
+    stream_mode="values",
+):
+    step["messages"][-1].pretty_print()
