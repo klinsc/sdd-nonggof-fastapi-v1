@@ -14,4 +14,4 @@ pip install -U "triton-windows<3.4"
 
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-pip install "fastapi[standard]" uvicorn python-dotenv openai typhoon-ocr pypdf langchain-core langchain sentence-transformers torch huggingface_hub transformers bitsandbytes accelerate langchain-community chromadb
+pip install "fastapi[standard]" uvicorn python-dotenv openai typhoon-ocr pypdf langchain-core langchain sentence-transformers torch huggingface_hub transformers bitsandbytes accelerate langchain-community chromadb langchain-openai
