@@ -2,18 +2,16 @@ import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware  # Import CORS middleware
 
-from app.dependencies import get_query_token, get_token_header
-from app.internal import admin
-from app.routers import chat, items, users
+from app.dependencies import get_query_token
+from app.routers import chat
 
 app = FastAPI(dependencies=[Depends(get_query_token)])
-
-app = FastAPI()
 
 # --- CORS Configuration ---
 origins = [
     "http://localhost",
     "http://localhost:3000",  # Your frontend's origin
+    "https://autocats.samkok.online",
     # You can add more origins if your frontend is deployed elsewhere, e.g.,
     # "https://your-frontend-domain.com"
 ]
