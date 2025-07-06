@@ -11,14 +11,15 @@ app = FastAPI(dependencies=[Depends(get_query_token)])
 origins = [
     "http://localhost",
     "http://localhost:3000",  # Your frontend's origin
-    "https://autocats.samkok.online",
+    "https://sdd.chatbordin.com",
+    "http://sdd.chatbordin.com",
     # You can add more origins if your frontend is deployed elsewhere, e.g.,
     # "https://your-frontend-domain.com"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Allow all origins, or specify `origins` list to restrict
     allow_credentials=True,  # Allow cookies/authentication headers to be sent
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
     allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
@@ -44,5 +45,5 @@ async def root():
     return {"message": "Hello Bigger Applications!"}
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
