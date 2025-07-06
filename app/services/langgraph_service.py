@@ -5,20 +5,14 @@ from typing import Callable
 
 import torch
 from dotenv import load_dotenv
-from huggingface_hub import login
-from langchain.embeddings.base import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.documents import Document  # Added for creating Document objects
-from langchain_core.prompts import PromptTemplate
+from langchain_huggingface import HuggingFaceEmbeddings
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # from transformers.utils.quantization_config import BitsAndBytesConfig
 from typhoon_ocr.ocr_utils import get_anchor_text, render_pdf_to_base64png
-
-from app.config import VarSettings
 
 # ! from langchain_community.document_loaders import PyPDFLoader # This import might become unused or replaced
 
@@ -345,33 +339,28 @@ len(texts)
 # print(len(texts[0].page_content))
 # print(texts[0].page_content)
 
+embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-m3",
+    model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"},
+)
 
-def embed_text(texts: list[Document]) -> Chroma:
-    class CustomHuggingFaceEmbeddings(Embeddings):
-        def __init__(self, model_name, **kwargs):
-            self.model = SentenceTransformer(model_name, **kwargs)
 
-        def embed_documents(self, texts):
-            embeddings = self.model.encode(texts, convert_to_tensor=True)
-            return embeddings.tolist()
+def embed_text(texts: list[Document]) -> Chroma | None:
+    try:
 
-        def embed_query(self, text):
-            embedding = self.model.encode([text], convert_to_tensor=True)
-            return embedding.tolist()[0]
+        # Add to vectorDB
+        vectorstore = Chroma.from_documents(
+            documents=texts,
+            collection_name=dataset_name.value,
+            embedding=embeddings,
+            persist_directory="storage/chroma_data",  # Directory to store Chroma data
+        )
 
-    embeddings = CustomHuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+        return vectorstore
 
-    embeddings.model.to("cuda")  # Move the model to GPU if available
-
-    # Add to vectorDB
-    vectorstore = Chroma.from_documents(
-        documents=texts,
-        collection_name=dataset_name.value,
-        embedding=embeddings,
-        persist_directory="data/chroma_data",  # Directory to store Chroma data
-    )
-
-    return vectorstore
+    except Exception as e:
+        print(f"Error during embedding or vector store creation: {e}")
+        return None
 
 
 import getpass
@@ -394,13 +383,13 @@ def retrieve(query: str):
     from langchain_community.vectorstores import Chroma
 
     # Check if the vector store already exists
-    vector_store: Chroma | None = None
-    if os.path.exists("data/chroma_data"):
+    if os.path.exists("storage/chroma_data"):
 
         # Load the existing vector store
         vector_store = Chroma(
             collection_name=dataset_name.value,
-            persist_directory="data/chroma_data",
+            embedding_function=embeddings,
+            persist_directory="storage/chroma_data",
         )
     else:
         vector_store = embed_text(texts)
