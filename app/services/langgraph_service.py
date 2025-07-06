@@ -374,9 +374,6 @@ def embed_text(texts: list[Document]) -> Chroma:
     return vectorstore
 
 
-vector_store = embed_text(texts)
-
-
 import getpass
 import os
 
@@ -393,6 +390,24 @@ from langchain_core.tools import tool
 @tool(response_format="content_and_artifact")
 def retrieve(query: str):
     """Retrieve information related to a query."""
+
+    from langchain_community.vectorstores import Chroma
+
+    # Check if the vector store already exists
+    vector_store: Chroma | None = None
+    if os.path.exists("data/chroma_data"):
+
+        # Load the existing vector store
+        vector_store = Chroma(
+            collection_name=dataset_name.value,
+            persist_directory="data/chroma_data",
+        )
+    else:
+        vector_store = embed_text(texts)
+
+    if vector_store is None:
+        raise ValueError("Vector store could not be created or loaded.")
+
     retrieved_docs = vector_store.similarity_search(query, k=2)
     serialized = "\n\n".join(
         (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
@@ -457,31 +472,21 @@ def generate(state: MessagesState):
     return {"messages": [response]}
 
 
-from langgraph.graph import END
-from langgraph.prebuilt import ToolNode, tools_condition
+def build_graph():
+    from langgraph.graph import END
+    from langgraph.prebuilt import tools_condition
 
-graph_builder.add_node(query_or_respond)
-graph_builder.add_node(tools)
-graph_builder.add_node(generate)
+    graph_builder.add_node(query_or_respond)
+    graph_builder.add_node(tools)
+    graph_builder.add_node(generate)
 
-graph_builder.set_entry_point("query_or_respond")
-graph_builder.add_conditional_edges(
-    "query_or_respond",
-    tools_condition,
-    {END: END, "tools": "tools"},
-)
-graph_builder.add_edge("tools", "generate")
-graph_builder.add_edge("generate", END)
+    graph_builder.set_entry_point("query_or_respond")
+    graph_builder.add_conditional_edges(
+        "query_or_respond",
+        tools_condition,
+        {END: END, "tools": "tools"},
+    )
+    graph_builder.add_edge("tools", "generate")
+    graph_builder.add_edge("generate", END)
 
-graph = graph_builder.compile()
-
-
-from langchain_core.messages import HumanMessage
-
-input_message = "ราคางานออกแบบสถานีไฟฟ้าคลองหนึ่งประมาณเท่าไหร่"
-
-for step in graph.stream(
-    {"messages": [HumanMessage(content=input_message)]},
-    stream_mode="values",
-):
-    step["messages"][-1].pretty_print()
+    return graph_builder.compile()
