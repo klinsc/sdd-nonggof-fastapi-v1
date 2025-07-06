@@ -366,123 +366,15 @@ def embed_text(texts: list[Document]) -> Chroma:
     # Add to vectorDB
     vectorstore = Chroma.from_documents(
         documents=texts,
-        collection_name="rag-chroma",
+        collection_name=dataset_name.value,
         embedding=embeddings,
+        persist_directory="data/chroma_data",  # Directory to store Chroma data
     )
 
     return vectorstore
 
 
 vector_store = embed_text(texts)
-
-
-# def build_llm()-> AutoModelForCausalLM:
-#     # Check if CUDA is available and set the device accordingly
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-#     # TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
-#     torch.set_float32_matmul_precision("high")
-
-#     # Check if MPS (Metal Performance Shaders) is available for Apple Silicon Macs
-#     if torch.backends.mps.is_available():
-#         device = "mps"
-#     print(device)
-
-#     # Set environment variable to ensure CUDA errors are raised immediately
-#     import os
-
-#     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-#     if device != "cuda":
-#         raise NotImplementedError
-
-#     hf_token = os.getenv("HF_TOKEN")
-#     login(token=hf_token)
-
-#     model_id = "scb10x/typhoon2.1-gemma3-4b"
-
-#     tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-#     # bnb_config = BitsAndBytesConfig(
-#     #     load_in_8bit=True,
-#     #     bnb_4bit_quant_type="nf4",  # or "fp4"
-#     #     bnb_4bit_compute_dtype=torch.bfloat16,
-#     #     bnb_4bit_use_double_quant=True,
-#     # )
-
-#     model = AutoModelForCausalLM.from_pretrained(
-#         model_id,
-#         torch_dtype=torch.bfloat16,
-#         device_map="auto",
-#     )
-#     print(model)
-
-#     # Example usage of the model with a prompt
-#     messages = [
-#         {
-#             "role": "system",
-#             "content": "You are a male AI assistant named Typhoon created by SCB 10X to be helpful, harmless, and honest. Typhoon is happy to help with analysis, question answering, math, coding, creative writing, teaching, role-play, general discussion, and all sorts of other tasks. Typhoon responds directly to all human messages without unnecessary affirmations or filler phrases like “Certainly!”, “Of course!”, “Absolutely!”, “Great!”, “Sure!”, etc. Specifically, Typhoon avoids starting responses with the word “Certainly” in any way. Typhoon follows this information in all languages, and always responds to the user in the language they use or request. Typhoon is now being connected with a human. Write in fluid, conversational prose, Show genuine interest in understanding requests, Express appropriate emotions and empathy. Also showing information in term that is easy to understand and visualized.",
-#         },
-#         {"role": "user", "content": "ขอสูตรไก่ย่าง"},
-#     ]
-
-#     input_ids = tokenizer.apply_chat_template(
-#         messages,
-#         add_generation_prompt=True,
-#         return_tensors="pt",
-#         enable_thinking=False,  # Switches between thinking and non-thinking modes. Default is False.
-#     ).to(model.device)
-
-#     outputs = model.generate(
-#         input_ids,
-#         max_new_tokens=512,
-#         do_sample=True,
-#         temperature=0.6,
-#         top_p=0.95,
-#     )
-#     response = outputs[0][input_ids.shape[-1] :]
-#     print(tokenizer.decode(response, skip_special_tokens=True))
-
-#     return model
-
-
-# llm = build_llm()
-
-
-# def build_rag():
-#     prompt = PromptTemplate(
-#         template="""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-#         You are an assistant for question-answering tasks.
-#         Use the following pieces of retrieved context to answer the question.
-#         If you don't know the answer, just say that you don't know.
-#         Use three sentences maximum and keep the answer concise.
-#         Respond **only in Thai language**.
-#         <|eot_id|><|start_header_id|>user<|end_header_id|>
-#         Question: {question}
-#         Context: {context}
-#         Answer:
-#         <|eot_id|><|start_header_id|>assistant<|end_header_id|>""",
-#         input_variables=["question", "context"],
-#     )
-
-#     from langchain.chains import RetrievalQA
-
-#     qa_chain = RetrievalQA.from_chain_type(
-#         llm=llm,
-#         chain_type="stuff",
-#         retriever=vectorstore.as_retriever(
-#             search_kwargs={"k": 2}
-#         ),  # k=2 คือค้นหา2ที่ หรือ หน้า
-#         return_source_documents=True,
-#         chain_type_kwargs={"prompt": prompt},
-#         verbose=True,
-#     )
-
-#     return qa_chain
-
-
-# qa_chain = build_rag()
-# result = qa_chain("งานออกแบบสถานีไฟฟ้าคลองหนึ่งมีราคาประมาณเท่าไหร่")
 
 
 import getpass
