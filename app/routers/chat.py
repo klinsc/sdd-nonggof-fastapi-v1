@@ -1,11 +1,13 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from llama_index.core.query_engine import BaseQueryEngine
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.graph import START, MessagesState, StateGraph
 from pydantic import BaseModel
 
-from app.services import llm_service
+from app.services import langgraph_service, llm_service
 
 router = APIRouter(
     prefix="/qa",
@@ -22,6 +24,11 @@ class Answer(BaseModel):
     answer: str
 
 
+graph = langgraph_service.build_graph()
+if not graph:
+    raise HTTPException(status_code=500, detail="Graph service is not available")
+
+
 async def answer_streamer(response_gen):
     # Assume response_gen is an async or sync generator yielding text chunks
     texts = ""
@@ -35,34 +42,45 @@ async def answer_streamer(response_gen):
         await asyncio.sleep(0)  # Yield control to event loop
 
 
-@router.post("/ask", response_model=Answer)
-async def ask_question(question: Question):
+@router.get("/stream")
+async def chat_stream(input_message: str):
     """
-    Ask a question and get an answer.
+    Streams responses from the LangGraph agent based on user input,
+    using stream_mode="messages" for token-level streaming.
     """
-    if not question.question:
-        raise HTTPException(status_code=400, detail="Question is required")
 
-    try:
-        query_engine = llm_service.query_engine
-        if not query_engine:
-            raise HTTPException(status_code=500, detail="LLM service is not available")
+    if not input_message:
+        raise HTTPException(status_code=400, detail="Input message is required")
 
-        if isinstance(query_engine, BaseQueryEngine):
-            streaming_response = query_engine.query(
-                question.question,
-            )
-            if streaming_response is None:
-                raise HTTPException(
-                    status_code=500, detail="Failed to get a response from the model"
-                )
+    async def event_generator():
+        initial_state = MessagesState(messages=[HumanMessage(content=input_message)])
 
-            return StreamingResponse(
-                answer_streamer(streaming_response.response_gen),  # type: ignore
-                media_type="text/plain",
-            )
+        async for chunk in graph.astream(initial_state, stream_mode="messages"):
+            message_token, metadata = chunk
 
-        return Answer(answer="model works")
+            if isinstance(message_token, AIMessage):
+                if getattr(message_token, "type", None) == "final_response":
+                    yield f"event: end_of_ai_response\ndata: {json.dumps({'metadata': metadata})}\n\n"
+                elif getattr(message_token, "content", None):
+                    data = {
+                        "type": "ai_chunk",
+                        "content": message_token.content,
+                        "metadata": metadata,
+                    }
+                    yield f"event: message_chunk\ndata: {json.dumps(data)}\n\n"
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            elif isinstance(message_token, ToolMessage):
+                data = {
+                    "type": "tool_message",
+                    "content": message_token.content,
+                    "name": message_token.name,
+                    "metadata": metadata,
+                }
+                yield f"event: tool_message\ndata: {json.dumps(data)}\n\n"
+
+            # Optionally handle other message types here
+
+        # Yield stream_end once after the loop
+        yield "event: stream_end\ndata: {}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
