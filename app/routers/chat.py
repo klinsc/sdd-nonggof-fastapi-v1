@@ -83,4 +83,12 @@ async def chat_stream(input_message: str):
         # Yield stream_end once after the loop
         yield "event: stream_end\ndata: {}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Type": "text/event-stream",
+            "Access-Control-Allow-Origin": "*",  # Adjust as needed for CORS
+        },
+    )
