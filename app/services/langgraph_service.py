@@ -380,8 +380,6 @@ from langchain_core.tools import tool
 def retrieve(query: str):
     """Retrieve information related to a query."""
 
-    from langchain_community.vectorstores import Chroma
-
     # Check if the vector store already exists
     if os.path.exists("storage/chroma_data"):
 
