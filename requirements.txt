@@ -1,0 +1,36 @@
+fastapi==0.115.14
+uvicorn==0.35.0
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+email_validator==2.2.0
+
+# LLM + Langchain ecosystem
+openai==1.93.0
+transformers==4.53.1
+sentence-transformers==5.0.0
+langchain==0.3.26
+langchain-core==0.3.68
+langchain-community==0.3.27
+langchain-openai==0.3.27
+langchain-chroma==0.2.4
+langchain-huggingface==0.3.0
+langchain-text-splitters==0.3.8
+
+# ChromaDB (Vector store)
+chromadb==1.0.15
+
+# Optional but commonly used
+httpx==0.28.1
+orjson==3.10.18
+python-dotenv==1.1.1
+tqdm==4.67.1
+numpy==2.3.1
+scikit-learn==1.7.0
+
+# Model inference
+torch==2.7.1+cu128
+torchaudio==2.7.1+cu128
+torchvision==0.22.1+cu128
+bitsandbytes==0.46.1
+llama_cpp_python==0.3.10
