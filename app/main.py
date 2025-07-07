@@ -9,17 +9,19 @@ app = FastAPI(dependencies=[Depends(get_query_token)])
 
 # --- CORS Configuration ---
 origins = [
-    "http://localhost",
+    # "http://localhost",
     "http://localhost:3000",  # Your frontend's origin
     "https://sdd.chatbordin.com",
     "http://sdd.chatbordin.com",
+    "https://ssd-web-beta.vercel.app",
+    "https://sdd-nonggof-reverse.chatbordin.com",
     # You can add more origins if your frontend is deployed elsewhere, e.g.,
     # "https://your-frontend-domain.com"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins, or specify `origins` list to restrict
+    allow_origins=origins,  # Allow all origins, or specify `origins` list to restrict
     allow_credentials=True,  # Allow cookies/authentication headers to be sent
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
     allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
