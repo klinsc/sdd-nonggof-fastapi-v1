@@ -522,8 +522,8 @@ def generate(state: MessagesState):
         "You are an assistant for question-answering tasks. "
         "Use the following pieces of retrieved context to answer "
         "the question. If you don't know the answer, say that you "
-        "don't know. Use three sentences maximum and keep the "
-        "answer concise. Respond **only in Thai language**."
+        "don't know. Use ten sentences maximum."
+        "Respond **only in Thai language**."
         "\n\n"
         f"{docs_content}"
     )
