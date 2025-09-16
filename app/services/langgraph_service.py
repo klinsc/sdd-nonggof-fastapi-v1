@@ -1,5 +1,7 @@
 import json
 import os
+import sqlite3
+from datetime import datetime
 from enum import Enum
 from typing import Callable
 
@@ -26,6 +28,69 @@ class DatasetName(str, Enum):
 
 # The dataset name for the documents
 dataset_name: DatasetName = DatasetName.SDD_DATA
+
+# ---- SQLite setup for saving user queries ----
+DB_DIR = os.path.join("storage")
+DB_PATH = os.path.join(DB_DIR, "app.sqlite3")
+os.makedirs(DB_DIR, exist_ok=True)
+
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                session_id TEXT,
+                content TEXT NOT NULL,
+                metadata TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def _coerce_message_content_to_text(content) -> str:
+    # Handles LangChain message.content being str or list (for multimodal)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    parts.append("[image]")
+                else:
+                    parts.append(str(item))
+            else:
+                parts.append(str(item))
+        return "\n".join([p for p in parts if p])
+    return str(content)
+
+
+def save_user_query(
+    content: str, session_id: str | None = None, metadata: dict | None = None
+):
+    meta_str = None
+    if metadata is not None:
+        try:
+            meta_str = json.dumps(metadata, ensure_ascii=False)
+        except Exception:
+            meta_str = str(metadata)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO user_queries (created_at, session_id, content, metadata) VALUES (?, ?, ?, ?)",
+            (datetime.utcnow().isoformat(), session_id, content, meta_str),
+        )
+        conn.commit()
+
+
+# Initialize DB on import
+init_db()
+# ---- end SQLite setup ----
 
 
 def get_doc():
@@ -413,6 +478,22 @@ graph_builder = StateGraph(MessagesState)
 # Step 1: Generate an AIMessage that may include a tool-call to be sent.
 def query_or_respond(state: MessagesState):
     """Generate tool call for retrieval or respond."""
+    # Persist the latest human query (if any)
+    try:
+        latest_human = next(
+            (m for m in reversed(state["messages"]) if m.type == "human"), None
+        )
+        if latest_human is not None:
+            content_text = _coerce_message_content_to_text(
+                getattr(latest_human, "content", "")
+            )
+            # session_id is optional; pass it via state when invoking the graph if you have one
+            session_id = state.get("session_id") if isinstance(state, dict) else None
+            save_user_query(content_text, session_id=session_id, metadata=None)
+    except Exception as e:
+        # Non-fatal: log and continue
+        print(f"Warning: failed to save user query to SQLite: {e}")
+
     llm_with_tools = llm.bind_tools([retrieve])
     response = llm_with_tools.invoke(state["messages"])
     # MessagesState appends messages to state instead of overwriting
