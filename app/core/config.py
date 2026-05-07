@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     CHROMA_DIR: str = "storage/chroma_data"
     SQLITE_PATH: str = "storage/app.sqlite3"
 
+    LLM_PROFILE: Literal["cloud", "local"] = "cloud"
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_PROVIDER: str = "openai"
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
@@ -41,6 +43,16 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 1000
 
     MAX_INPUT_CHARS: int = 4000
+
+    @model_validator(mode="after")
+    def _validate_provider_secrets(self) -> "Settings":
+        if self.LLM_PROFILE == "cloud" and not self.OPENAI_API_KEY:
+            raise ValueError(
+                "OPENAI_API_KEY is required when LLM_PROFILE=cloud."
+            )
+        if len(self.API_KEY) < 16:
+            raise ValueError("API_KEY must be at least 16 characters.")
+        return self
 
 
 @lru_cache(maxsize=1)

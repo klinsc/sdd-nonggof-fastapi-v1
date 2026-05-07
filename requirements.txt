@@ -24,6 +24,10 @@ chromadb==1.0.15
 typhoon-ocr==0.4.4
 pypdf==5.1.0
 
+# Test
+pytest==8.3.4
+pytest-asyncio==0.25.0
+
 # Optional but commonly used
 httpx==0.28.1
 orjson==3.10.18
