@@ -32,11 +32,14 @@
 
 This repository contains the **FastAPI backend** server, which exposes streaming chat endpoints powered by:
 
-- **Typhoon OCR** — for extracting text from PDF standard documents
+- **Ollama (Local Vision Model)** — for offline OCR extraction from PDF documents (`scripts/run_local_ocr.py`)
 - **LangChain + LangGraph** — for orchestrating the RAG pipeline
 - **ChromaDB** — as the vector database for semantic search
 - **GPT-4o-mini** — as the LLM for response generation
 - **BAAI/bge-m3** — as the embedding model for document vectorization
+
+> **Decoupled Architecture:** Document ingestion (OCR) runs **offline** via a standalone script.
+> The FastAPI server only loads pre-processed JSON files — no cloud OCR API calls at runtime.
 
 ---
 
@@ -52,48 +55,55 @@ This repository contains the **FastAPI backend** server, which exposes streaming
 ## System Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Client Layer                              │
-│              Web UI  /  Line Chatbot  /  API Client              │
-└──────────────────┬───────────────────────────────────────────────┘
-                   │  SSE (Server-Sent Events)
-                   ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     FastAPI Server (this repo)                   │
-│                                                                  │
-│  ┌─────────────┐    ┌────────────────────────────────────────┐   │
-│  │  /qa/stream  │───▶│        LangGraph Agent Pipeline        │   │
-│  │   (Router)   │    │                                        │   │
-│  └─────────────┘    │  ┌───────────────┐  ┌──────────────┐   │   │
-│                      │  │ query_or_     │  │   retrieve    │   │   │
-│                      │  │   respond     │─▶│   (tool)      │   │   │
-│                      │  └───────────────┘  └──────┬───────┘   │   │
-│                      │                            │            │   │
-│                      │  ┌───────────────┐         │            │   │
-│                      │  │   generate    │◀────────┘            │   │
-│                      │  │  (response)   │                      │   │
-│                      │  └───────────────┘                      │   │
-│                      └────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐   │
-│  │   ChromaDB   │    │   SQLite DB   │    │  Typhoon OCR     │   │
-│  │ (Vector Store)│    │ (Query Log)  │    │ (PDF Processing) │   │
-│  └──────────────┘    └──────────────┘    └──────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
+ ╔══════════════════════════════════════════════════════════════════╗
+ ║              OFFLINE — Document Ingestion Pipeline              ║
+ ║                  (scripts/run_local_ocr.py)                     ║
+ ║                                                                 ║
+ ║  PDF Files ──▶ PyMuPDF (render) ──▶ Ollama Vision Model ──▶ JSON║
+ ║  (data/sdd-data/)                           (data/sdd-data_json/)║
+ ╚══════════════════════════════════════════════════════════════════╝
+                              │
+                    Pre-processed JSON files
+                              │
+                              ▼
+ ╔══════════════════════════════════════════════════════════════════╗
+ ║              ONLINE — FastAPI Server (this repo)                ║
+ ║                                                                 ║
+ ║  ┌─────────────┐    ┌────────────────────────────────────────┐  ║
+ ║  │  /qa/stream  │───▶│        LangGraph Agent Pipeline        │  ║
+ ║  │   (Router)   │    │                                        │  ║
+ ║  └─────────────┘    │  query_or_respond → retrieve → generate│  ║
+ ║                      └────────────────────────────────────────┘  ║
+ ║                                                                 ║
+ ║  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐   ║
+ ║  │   ChromaDB   │    │   SQLite DB   │    │  JSON Loader     │   ║
+ ║  │ (Vector Store)│    │ (Query Log)  │    │ (No cloud API)   │   ║
+ ║  └──────────────┘    └──────────────┘    └──────────────────┘   ║
+ ╚══════════════════════════════════════════════════════════════════╝
+                              ▲
+                   SSE (Server-Sent Events)
+                              │
+ ┌──────────────────────────────────────────────────────────────────┐
+ │                        Client Layer                              │
+ │              Web UI  /  Line Chatbot  /  API Client              │
+ └──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Pipeline Workflow
 
 ```
-PDF Documents
-  → Typhoon OCR (Text Extraction + Markdown Conversion)
-  → JSON Storage (per-document OCR output)
-  → Text Chunking (RecursiveCharacterTextSplitter, 3000 tokens, 1000 overlap)
-  → Embedding (BAAI/bge-m3 via HuggingFace)
-  → ChromaDB Vector Store
-  → User Query (via /qa/stream SSE endpoint)
-  → LangGraph Agent (query_or_respond → retrieve → generate)
-  → Streamed AI Response (Thai language)
+[OFFLINE]  PDF Documents
+             → PyMuPDF (render pages to base64 PNG)
+             → Ollama Vision Model (extract text + tables as Markdown)
+             → JSON files saved to data/sdd-data_json/
+
+[ONLINE]   JSON files loaded at server startup
+             → Text Chunking (RecursiveCharacterTextSplitter, 3000 tokens, 1000 overlap)
+             → Embedding (BAAI/bge-m3 via HuggingFace)
+             → ChromaDB Vector Store
+             → User Query (via /qa/stream SSE endpoint)
+             → LangGraph Agent (query_or_respond → retrieve → generate)
+             → Streamed AI Response (Thai language)
 ```
 
 ---
@@ -104,16 +114,14 @@ PDF Documents
 | ----------------- | ------------------------------------------------------- |
 | **Framework**     | FastAPI 0.115 + Uvicorn                                 |
 | **LLM**          | GPT-4o-mini (via OpenAI API)                            |
-| **OCR Engine**   | Typhoon OCR Preview (via OpenTyphoon API)                |
+| **OCR Engine**   | Ollama + Vision Model (local, offline via `scripts/run_local_ocr.py`) |
+| **PDF Renderer** | PyMuPDF (fitz) — renders PDF pages to PNG for OCR      |
 | **Embeddings**   | BAAI/bge-m3 (HuggingFace, CUDA-accelerated)            |
 | **RAG Pipeline** | LangChain 0.3 + LangGraph                              |
 | **Vector DB**    | ChromaDB 1.0 (with persistent local storage)            |
-| **Local LLM**    | Typhoon 2.1 Gemma3 4B (GGUF, via llama-cpp-python) ¹   |
 | **Database**     | SQLite (for query logging)                              |
 | **GPU Support**  | PyTorch 2.7 + CUDA 12.8                                |
 | **Language**     | Python 3.11                                             |
-
-> ¹ The local LLM (llama-cpp-python) is available as an alternative inference option in `llm_service.py` but is currently not active. The production pipeline uses GPT-4o-mini.
 
 ---
 
@@ -121,6 +129,8 @@ PDF Documents
 
 ```
 sdd-nonggof-fastapi-v1/
+├── scripts/                      # Offline tooling
+│   └── run_local_ocr.py          # 🔑 Offline OCR ingestion (Ollama + PyMuPDF)
 ├── app/                          # Main application package
 │   ├── __init__.py
 │   ├── main.py                   # FastAPI app entry point, CORS config, router registration
@@ -133,19 +143,18 @@ sdd-nonggof-fastapi-v1/
 │   │   └── users.py              # (placeholder) User routes
 │   ├── services/                 # Core business logic
 │   │   ├── __init__.py
-│   │   ├── langgraph_service.py  # 🔑 Active RAG pipeline (OCR → Embed → Retrieve → Generate)
+│   │   ├── langgraph_service.py  # 🔑 Online RAG pipeline (JSON → Embed → Retrieve → Generate)
 │   │   └── llm_service.py        # (deprecated) LlamaIndex-based pipeline
 │   └── internal/                 # Internal admin modules
 │       ├── __init__.py
 │       └── admin.py              # Admin endpoint (placeholder)
 ├── data/                         # Document storage (gitignored)
 │   ├── manuals/                  # Manual documents
-│   ├── sdd-data/                 # Source PDF files for OCR processing
-│   ├── sdd-data_json/            # OCR output (JSON with Markdown content)
+│   ├── sdd-data/                 # Source PDF files (input for offline OCR)
+│   ├── sdd-data_json/            # Pre-processed JSON files (output of offline OCR)
 │   ├── standards/                # Standard documents
-│   └── standards_json/           # OCR output for standards
+│   └── standards_json/           # Pre-processed JSON for standards
 ├── models/                       # LLM model files (gitignored)
-│   └── typhoon2.1-gemma3-4b-q4_k_m.gguf  # Local GGUF model (~2.5GB)
 ├── storage/                      # Persistent storage (gitignored)
 │   ├── app.sqlite3               # SQLite database for user query logging
 │   └── chroma_data/              # ChromaDB vector store data
@@ -162,6 +171,7 @@ sdd-nonggof-fastapi-v1/
 - **Python 3.11** (recommended via Conda)
 - **NVIDIA GPU** with CUDA support (recommended for embedding inference)
 - **CUDA Toolkit 12.8+** and **cuDNN**
+- **Ollama** installed and running locally (for offline OCR ingestion)
 - **Git**
 
 ---
@@ -233,9 +243,6 @@ DEBUG=true
 # HuggingFace token (for model downloads)
 HF_TOKEN="hf_your_token_here"
 
-# Typhoon OCR API key (OpenTyphoon platform)
-TYHOON_API_KEY="sk-your-typhoon-key-here"
-
 # OpenAI API key (for GPT-4o-mini)
 OPENAI_API_KEY="sk-proj-your-openai-key-here"
 ```
@@ -245,8 +252,9 @@ OPENAI_API_KEY="sk-proj-your-openai-key-here"
 | Key              | Purpose                                  | Provider                                          |
 | ---------------- | ---------------------------------------- | ------------------------------------------------- |
 | `HF_TOKEN`       | Download embedding models from HuggingFace | [huggingface.co](https://huggingface.co)          |
-| `TYHOON_API_KEY` | Typhoon OCR for PDF text extraction       | [opentyphoon.ai](https://api.opentyphoon.ai)      |
 | `OPENAI_API_KEY` | GPT-4o-mini for response generation       | [platform.openai.com](https://platform.openai.com) |
+
+> **Note:** Typhoon OCR API key (`TYHOON_API_KEY`) is no longer required. OCR is now handled offline via Ollama.
 
 ---
 
@@ -342,13 +350,13 @@ eventSource.addEventListener('stream_end', () => {
 
 ## Core Services
 
-### `langgraph_service.py` — RAG Pipeline (Active)
+### `langgraph_service.py` — Online RAG Pipeline (Active)
 
-The primary service powering the AI chatbot. It implements a full RAG pipeline using LangGraph:
+The primary service powering the AI chatbot. Loads pre-processed JSON files and runs the RAG pipeline:
 
 | Component              | Description                                                                 |
 | ---------------------- | --------------------------------------------------------------------------- |
-| **OCR Processing**     | Uses Typhoon OCR to convert PDF pages to Markdown via the OpenTyphoon API   |
+| **Document Loading**   | Reads pre-processed JSON files from `data/sdd-data_json/` (no cloud API)   |
 | **Text Splitting**     | `RecursiveCharacterTextSplitter` with 3000-token chunks and 1000 overlap    |
 | **Embedding**          | `BAAI/bge-m3` model (GPU-accelerated via HuggingFace)                      |
 | **Vector Store**       | ChromaDB with persistent storage at `storage/chroma_data/`                  |
@@ -356,60 +364,52 @@ The primary service powering the AI chatbot. It implements a full RAG pipeline u
 | **LLM Generation**     | GPT-4o-mini via OpenAI API, responses in Thai language                      |
 | **Query Logging**      | All user queries saved to SQLite at `storage/app.sqlite3`                   |
 
-#### LangGraph Agent Flow
+### `scripts/run_local_ocr.py` — Offline OCR Ingestion
 
-```
-                  ┌─────────────────────┐
-                  │  query_or_respond   │
-                  │ (decides: tool call │
-                  │   or direct answer) │
-                  └──────────┬──────────┘
-                             │
-                    ┌────────┴────────┐
-                    │                 │
-               tool_call          no tool
-                    │                 │
-                    ▼                 ▼
-            ┌──────────────┐      ┌──────┐
-            │   retrieve   │      │ END  │
-            │ (ChromaDB    │      └──────┘
-            │  similarity  │
-            │   search)    │
-            └──────┬───────┘
-                   │
-                   ▼
-            ┌──────────────┐
-            │   generate   │
-            │ (LLM answer  │
-            │  with context)│
-            └──────┬───────┘
-                   │
-                   ▼
-                ┌──────┐
-                │ END  │
-                └──────┘
+Standalone script that processes PDFs into structured JSON files using a local Ollama vision model:
+
+```bash
+# Process all PDFs with default model (qwen2.5-vl)
+python scripts/run_local_ocr.py
+
+# Use a specific model
+python scripts/run_local_ocr.py --model llama3-typhoon-vision
+
+# Re-process already-converted files
+python scripts/run_local_ocr.py --force
+
+# Process a different directory
+python scripts/run_local_ocr.py --pdf-dir data/standards --json-dir data/standards_json
 ```
 
 ### `llm_service.py` — Local LLM Pipeline (Deprecated)
 
-An alternative pipeline using **LlamaIndex** with the local **Typhoon 2.1 Gemma3 4B** GGUF model for fully offline inference. This service is currently **commented out** and not in active use. It can be enabled for air-gapped/intranet deployments.
+An alternative pipeline using **LlamaIndex** with a local GGUF model. Currently **commented out** and not in active use.
 
 ---
 
 ## Data Pipeline
 
-### Document Processing Flow
+### Decoupled Architecture
+
+The system uses a **two-phase** approach:
+
+#### Phase 1 — Offline Ingestion (`scripts/run_local_ocr.py`)
 
 1. **Source PDFs** are placed in `data/sdd-data/` (or `data/standards/`)
-2. **OCR Processing**: Each PDF is processed page-by-page using Typhoon OCR
-   - Pages are rendered to base64 PNG images
-   - Anchor text is extracted for context
-   - Typhoon OCR generates Markdown representation
+2. **OCR Processing** (runs locally via Ollama — no cloud API):
+   - Each PDF page is rendered to a base64 PNG image using PyMuPDF
+   - The image is sent to a local Ollama vision model (e.g., `qwen2.5-vl`)
+   - The model extracts text and tables as Markdown
    - Results are saved as JSON in `data/sdd-data_json/`
-3. **Chunking**: Extracted text is split using TikToken-based chunking (3000 tokens, 1000 overlap)
-4. **Embedding**: Chunks are embedded using `BAAI/bge-m3` model
-5. **Storage**: Vectors are stored in ChromaDB at `storage/chroma_data/`
-6. **On first query**: If no existing vector store is found, embeddings are generated automatically
+
+#### Phase 2 — Online Serving (FastAPI server)
+
+3. **JSON Loading**: Pre-processed JSON files are loaded at server startup
+4. **Chunking**: Text is split using TikToken-based chunking (3000 tokens, 1000 overlap)
+5. **Embedding**: Chunks are embedded using `BAAI/bge-m3` model
+6. **Storage**: Vectors are stored in ChromaDB at `storage/chroma_data/`
+7. **On first query**: If no existing vector store is found, embeddings are generated automatically
 
 ### Known Problematic Files
 

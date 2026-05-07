@@ -16,6 +16,7 @@ langchain-openai==0.3.27
 langchain-chroma==0.2.4
 langchain-huggingface==0.3.0
 langchain-text-splitters==0.3.8
+langgraph>=0.4.0
 
 # ChromaDB (Vector store)
 chromadb==1.0.15
@@ -34,3 +35,7 @@ torchaudio==2.7.1+cu128
 torchvision==0.22.1+cu128
 bitsandbytes==0.46.1
 llama_cpp_python==0.3.10
+
+# Offline OCR ingestion (used by scripts/run_local_ocr.py)
+ollama>=0.4.0
+PyMuPDF>=1.25.0
