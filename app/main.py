@@ -1,51 +1,74 @@
-import uvicorn
-from fastapi import Depends, FastAPI
-from fastapi.middleware.cors import CORSMiddleware  # Import CORS middleware
+import logging
+import uuid
+from contextlib import asynccontextmanager
 
-from app.dependencies import get_query_token
+from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import get_settings
+from app.core.logging import configure_logging, request_id_ctx
+from app.dependencies import require_api_key
 from app.routers import chat
 
-app = FastAPI(dependencies=[Depends(get_query_token)])
+logger = logging.getLogger(__name__)
 
-# --- CORS Configuration ---
-origins = [
-    # "http://localhost",
-    "http://localhost:3000",  # Your frontend's origin
-    "https://sdd.chatbordin.com",
-    "http://sdd.chatbordin.com",
-    "https://ssd-web-beta.vercel.app",
-    "https://sdd-nonggof-reverse.chatbordin.com",
-    # You can add more origins if your frontend is deployed elsewhere, e.g.,
-    # "https://your-frontend-domain.com"
-]
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    configure_logging(debug=settings.DEBUG)
+    logger.info("Starting application; building RAG graph…")
+
+    from app.services import langgraph_service
+
+    langgraph_service.init_resources()
+    app.state.graph = langgraph_service.build_graph()
+    app.state.ready = True
+    logger.info("Application ready.")
+    try:
+        yield
+    finally:
+        app.state.ready = False
+        logger.info("Application shutting down.")
+
+
+settings = get_settings()
+app = FastAPI(
+    title="น้องกอฟ — PEA SDD AI Assistant",
+    lifespan=lifespan,
+    dependencies=[Depends(require_api_key)],
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Allow all origins, or specify `origins` list to restrict
-    allow_credentials=True,  # Allow cookies/authentication headers to be sent
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers (e.g., Content-Type, Authorization)
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# --- End CORS Configuration ---
-
-app.include_router(
-    chat.router,
-)
-# app.include_router(users.router)
-# app.include_router(items.router)
-# app.include_router(
-#     admin.router,
-#     prefix="/admin",
-#     tags=["admin"],
-#     dependencies=[Depends(get_token_header)],
-#     responses={418: {"description": "I'm a teapot"}},
-# )
 
 
-@app.get("/")
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = request_id_ctx.set(rid)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_ctx.reset(token)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+app.include_router(chat.router)
+
+
+@app.get("/", dependencies=[])
 async def root():
     return {"message": "Hello Bigger Applications!"}
 
 
-# if __name__ == "__main__":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/healthz", dependencies=[])
+async def healthz(request: Request):
+    ready = bool(getattr(request.app.state, "ready", False))
+    return {"status": "ok" if ready else "starting", "ready": ready}

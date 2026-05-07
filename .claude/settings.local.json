@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\klins\\\\GitHub\\\\sdd-nonggof-fastapi-v1\" -Recurse -Force)",
+      "Bash(Select-Object FullName)"
+    ]
+  }
+}
