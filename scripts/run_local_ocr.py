@@ -48,6 +48,11 @@ DEFAULT_PDF_DIR = "data/sdd-data"
 DEFAULT_JSON_DIR = "data/sdd-data_json"
 DEFAULT_DPI = 200  # Resolution for PDF→image rendering
 
+# Pages with longest edge > this threshold (in points) are considered A3 or
+# larger engineering drawings and will be skipped. A4 portrait longest edge
+# is ~842pt; A3 portrait is ~1190pt. The 1000pt cutoff sits safely between.
+A3_LONGEST_EDGE_THRESHOLD = 1000  # points (1pt = 1/72 inch)
+
 SYSTEM_PROMPT = (
     "You are an expert Thai electrical engineer. "
     "Extract all text and tables from this image and format it as Markdown. "
@@ -71,24 +76,46 @@ SKIP_FILES = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def pdf_page_to_base64(pdf_path: str, page_num: int, dpi: int = DEFAULT_DPI) -> str:
-    """Render a single PDF page to a base64-encoded PNG string."""
-    doc = fitz.open(pdf_path)
-    page = doc.load_page(page_num)
+def is_a4_page(page: fitz.Page) -> bool:
+    """
+    Return True if the page is A4 (or smaller). A3 / engineering-drawing
+    pages whose longest edge exceeds the threshold are rejected.
+
+    Uses the *MediaBox* dimensions (in points, 1pt = 1/72"):
+      - A4:  595 × 842 pt  → longest edge ≈ 842
+      - A3: 842 × 1190 pt  → longest edge ≈ 1190
+    """
+    rect = page.rect  # page dimensions *before* rotation is applied
+    longest_edge = max(rect.width, rect.height)
+    return longest_edge <= A3_LONGEST_EDGE_THRESHOLD
+
+
+def render_page_to_base64(
+    page: fitz.Page, dpi: int = DEFAULT_DPI
+) -> str:
+    """
+    Render a fitz.Page to a base64-encoded PNG string.
+
+    Auto-corrects page rotation so the vision model always receives an
+    upright image regardless of the PDF's native /Rotate metadata.
+    """
+    # --- Auto-correct rotation -------------------------------------------
+    # page.rotation returns the effective rotation (0, 90, 180, 270).
+    # Setting it to 0 before rendering ensures the pixmap is upright.
+    rotation = page.rotation
+    if rotation != 0:
+        page.set_rotation(0)
+
     # Render at the requested DPI (default 72 → scale factor = dpi/72)
     mat = fitz.Matrix(dpi / 72, dpi / 72)
     pix = page.get_pixmap(matrix=mat)
     png_bytes = pix.tobytes("png")
-    doc.close()
+
+    # Restore original rotation so we don't mutate the document permanently
+    if rotation != 0:
+        page.set_rotation(rotation)
+
     return base64.b64encode(png_bytes).decode("utf-8")
-
-
-def get_total_pages(pdf_path: str) -> int:
-    """Return the number of pages in a PDF."""
-    doc = fitz.open(pdf_path)
-    count = doc.page_count
-    doc.close()
-    return count
 
 
 def call_ollama_vision(
@@ -153,6 +180,9 @@ def process_pdf(
     Process a single PDF file: render each page, run OCR via Ollama,
     and save the combined result as a JSON file.
 
+    - A3 (or larger) pages are automatically skipped.
+    - Rotated pages are de-rotated before rendering.
+
     Returns True if the file was processed, False if skipped.
     """
     filename = os.path.basename(pdf_path)
@@ -164,20 +194,39 @@ def process_pdf(
         print(f"  ⏭️  Skipping (already exists): {filename}")
         return False
 
-    total_pages = get_total_pages(pdf_path)
+    doc = fitz.open(pdf_path)
+    total_pages = doc.page_count
     print(f"  📄 Processing: {filename} ({total_pages} page(s))")
 
     pages_data = []
+    a3_skipped = 0
     combined_markdown = ""
 
     for page_idx in range(total_pages):
         page_num = page_idx + 1
-        print(f"      Page {page_num}/{total_pages} ... ", end="", flush=True)
+        page = doc.load_page(page_idx)
+
+        # --- Filter: skip A3 / large engineering-drawing pages -----------
+        if not is_a4_page(page):
+            longest = max(page.rect.width, page.rect.height)
+            print(
+                f"      Page {page_num}/{total_pages} ... "
+                f"⏭️  skipped (A3/large: longest edge {longest:.0f}pt)"
+            )
+            a3_skipped += 1
+            continue
+
+        # --- Rotation info (for logging) ---------------------------------
+        rotation_info = ""
+        if page.rotation != 0:
+            rotation_info = f", derotated from {page.rotation}°"
+
+        print(f"      Page {page_num}/{total_pages}{rotation_info} ... ", end="", flush=True)
 
         t0 = time.time()
 
-        # Render page to base64 image
-        image_b64 = pdf_page_to_base64(pdf_path, page_idx, dpi=dpi)
+        # Render page to base64 image (auto-corrects rotation)
+        image_b64 = render_page_to_base64(page, dpi=dpi)
 
         # Call Ollama
         page_data = call_ollama_vision(image_b64, filename, page_num, model)
@@ -191,6 +240,11 @@ def process_pdf(
         if "จึงเรียน" in page_data.get("content_markdown", ""):
             print(f"      ⏹️  Detected closing phrase 'จึงเรียน' — stopping early.")
             break
+
+    doc.close()
+
+    if a3_skipped:
+        print(f"      ℹ️  {a3_skipped} A3/large page(s) skipped")
 
     # Build the final output JSON (compatible with existing pipeline)
     final_output = {

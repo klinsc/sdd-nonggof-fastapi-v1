@@ -382,6 +382,14 @@ python scripts/run_local_ocr.py --force
 python scripts/run_local_ocr.py --pdf-dir data/standards --json-dir data/standards_json
 ```
 
+**Page Processing Rules:**
+
+| Rule | Behavior |
+|------|----------|
+| **A4 pages only** | Pages with longest edge > 1,000pt are identified as A3 or larger engineering drawings and **skipped automatically**. Only A4-sized pages (longest edge ≈ 842pt) are processed. |
+| **Auto-rotation** | Pages with non-zero `/Rotate` metadata (90°, 180°, 270°) are **de-rotated to upright** before rendering, ensuring the vision model receives correctly oriented images. |
+| **Early stop** | Processing stops when the Thai closing phrase "จึงเรียน" is detected, as it marks the end of the document body. |
+
 ### `llm_service.py` — Local LLM Pipeline (Deprecated)
 
 An alternative pipeline using **LlamaIndex** with a local GGUF model. Currently **commented out** and not in active use.
