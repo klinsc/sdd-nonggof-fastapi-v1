@@ -34,7 +34,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import ollama
+    from ollama import Client as OllamaClient
 except ImportError:
     print("ERROR: ollama Python client is required. Install it with: pip install ollama")
     sys.exit(1)
@@ -47,6 +47,7 @@ DEFAULT_MODEL = "qwen2.5-vl"
 DEFAULT_PDF_DIR = "data/sdd-data"
 DEFAULT_JSON_DIR = "data/sdd-data_json"
 DEFAULT_DPI = 200  # Resolution for PDF→image rendering
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 # Pages with longest edge > this threshold (in points) are considered A3 or
 # larger engineering drawings and will be skipped. A4 portrait longest edge
@@ -119,6 +120,7 @@ def render_page_to_base64(
 
 
 def call_ollama_vision(
+    client: OllamaClient,
     image_b64: str,
     filename: str,
     page_num: int,
@@ -134,7 +136,7 @@ def call_ollama_vision(
         f'Return ONLY valid JSON with keys: "filename", "page", "content_markdown".'
     )
 
-    response = ollama.chat(
+    response = client.chat(
         model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -170,6 +172,7 @@ def call_ollama_vision(
 
 
 def process_pdf(
+    client: OllamaClient,
     pdf_path: str,
     json_dir: str,
     model: str,
@@ -229,7 +232,7 @@ def process_pdf(
         image_b64 = render_page_to_base64(page, dpi=dpi)
 
         # Call Ollama
-        page_data = call_ollama_vision(image_b64, filename, page_num, model)
+        page_data = call_ollama_vision(client, image_b64, filename, page_num, model)
         elapsed = time.time() - t0
         print(f"done ({elapsed:.1f}s)")
 
@@ -301,6 +304,11 @@ def main():
         action="store_true",
         help="Re-process files even if output JSON already exists",
     )
+    parser.add_argument(
+        "--host",
+        default=DEFAULT_OLLAMA_HOST,
+        help=f"Ollama server URL (default: {DEFAULT_OLLAMA_HOST})",
+    )
     args = parser.parse_args()
 
     pdf_dir = args.pdf_dir
@@ -310,11 +318,14 @@ def main():
         print(f"ERROR: PDF directory not found: {pdf_dir}")
         sys.exit(1)
 
+    # Create Ollama client with explicit host
+    client = OllamaClient(host=args.host)
+
     # Verify Ollama is reachable
     try:
-        ollama.list()
+        client.list()
     except Exception as e:
-        print(f"ERROR: Cannot connect to Ollama. Is it running? ({e})")
+        print(f"ERROR: Cannot connect to Ollama at {args.host}. Is it running? ({e})")
         sys.exit(1)
 
     os.makedirs(json_dir, exist_ok=True)
@@ -336,6 +347,7 @@ def main():
     print(f"\n🔍 Found {len(pdf_files)} PDF(s) in {pdf_dir}")
     print(f"📂 Output directory: {json_dir}")
     print(f"🤖 Model: {args.model}")
+    print(f"🌐 Host: {args.host}")
     print(f"📐 DPI: {args.dpi}")
     print("-" * 60)
 
@@ -346,7 +358,7 @@ def main():
     for pdf_path in pdf_files:
         try:
             was_processed = process_pdf(
-                pdf_path, json_dir, args.model, force=args.force, dpi=args.dpi
+                client, pdf_path, json_dir, args.model, force=args.force, dpi=args.dpi
             )
             if was_processed:
                 processed += 1
