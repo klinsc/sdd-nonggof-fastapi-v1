@@ -198,7 +198,7 @@ OLLAMA_HOST=http://localhost:11434
 # MAX_INPUT_CHARS=4000
 ```
 
-> **Gotcha — `OLLAMA_HOST`:** if your shell exports `OLLAMA_HOST=0.0.0.0` (used to make `ollama serve` bind to all interfaces), pydantic-settings will read it and the langchain-ollama client will fail (no scheme/port). Either unset it before starting uvicorn, or override with `$env:OLLAMA_HOST = "http://127.0.0.1:11434"` (PowerShell) / `OLLAMA_HOST=http://127.0.0.1:11434` (bash) when launching the API.
+> **Note — `OLLAMA_HOST`:** if your shell exports `OLLAMA_HOST=0.0.0.0` (used to make `ollama serve` bind to all interfaces), pydantic-settings reads it. The app coerces bare hosts into a full client URL (e.g. `0.0.0.0` → `http://127.0.0.1:11434`, `localhost` → `http://localhost:11434`), so you can ignore this most of the time. Set the variable explicitly only if Ollama is on a non-standard host or port.
 
 `Settings` validates these at startup and **fails fast** if:
 - `API_KEY` is missing or shorter than 16 characters

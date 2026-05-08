@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     MAX_INPUT_CHARS: int = 4000
 
     @model_validator(mode="after")
+    def _coerce_ollama_host(self) -> "Settings":
+        # Shells often export OLLAMA_HOST=0.0.0.0 (the `ollama serve` bind
+        # address). pydantic-settings reads it case-insensitively and
+        # langchain-ollama needs a full client URL, so coerce here.
+        host = self.OLLAMA_HOST.strip()
+        if not host.startswith(("http://", "https://")):
+            if host == "0.0.0.0" or host.startswith("0.0.0.0:"):
+                host = host.replace("0.0.0.0", "127.0.0.1", 1)
+            if ":" not in host:
+                host = f"{host}:11434"
+            host = f"http://{host}"
+        self.OLLAMA_HOST = host
+        return self
+
+    @model_validator(mode="after")
     def _validate_provider_secrets(self) -> "Settings":
         if self.LLM_PROFILE == "cloud" and not self.OPENAI_API_KEY:
             raise ValueError(
