@@ -1,0 +1,240 @@
+<!--
+  Lightweight test client for POST /qa/stream.
+
+  CORS: the FastAPI server allows only origins listed in CORS_ORIGINS
+  (default: http://localhost:3000). Pick ONE of:
+
+    A) Add "null" to CORS_ORIGINS in .env, then open this file via file://
+       Example .env line:
+         CORS_ORIGINS=["http://localhost:3000","null"]
+
+    B) Serve this file with a simple static server, then add that origin
+       to CORS_ORIGINS:
+         cd scripts && python -m http.server 8080
+         # browse to http://localhost:8080/chat_client.html
+         # in .env add http://localhost:8080 to CORS_ORIGINS
+
+  After editing .env, restart uvicorn so pydantic re-reads the file.
+-->
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <title>น้องกอฟ — Chat Test Client</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 860px; margin: 1.5rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+    .config { display: grid; grid-template-columns: 110px 1fr; gap: .4rem .8rem; align-items: center; margin-bottom: 1rem; padding: .75rem; border: 1px solid #ddd; border-radius: 6px; }
+    .config input[type=text], .config input[type=password] { padding: .35rem .5rem; font-family: ui-monospace, monospace; font-size: .85rem; }
+    .config label { font-size: .85rem; opacity: .8; }
+    .config .row { display: flex; align-items: center; gap: .5rem; font-size: .85rem; }
+    #messages { border: 1px solid #ddd; height: 55vh; overflow-y: auto; padding: 1rem; border-radius: 6px; background: rgba(0,0,0,.02); }
+    .msg { margin-bottom: 1rem; padding: .5rem .75rem; border-radius: 6px; }
+    .msg.user { background: rgba(31, 111, 235, .08); }
+    .msg.assistant { background: rgba(26, 127, 55, .06); white-space: pre-wrap; word-break: break-word; }
+    .msg.error { background: rgba(207, 34, 46, .08); color: #cf222e; font-style: italic; }
+    .msg .role { font-weight: 600; font-size: .8rem; opacity: .7; margin-bottom: .25rem; }
+    #input-row { display: flex; gap: .5rem; margin-top: .75rem; }
+    #input { flex: 1; padding: .55rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 6px; }
+    button { padding: .55rem 1.1rem; border: 1px solid #ccc; border-radius: 6px; background: #f6f8fa; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: wait; }
+    .meta { font-size: .75rem; opacity: .55; margin-top: .25rem; }
+    .cursor::after { content: "▍"; animation: blink 1s steps(2) infinite; opacity: .5; }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+</head>
+<body>
+  <h1>น้องกอฟ — Chat Test Client</h1>
+
+  <div class="config">
+    <label>Base URL</label><input type="text" id="baseUrl" value="http://127.0.0.1:8000" />
+    <label>API Key</label><input type="password" id="apiKey" placeholder="X-API-Key value (saved to localStorage)" />
+    <label>History</label>
+    <div class="row">
+      <input type="checkbox" id="useHistory" checked>
+      <span>prepend last <input type="number" id="historyTurns" value="3" min="0" max="10" style="width: 3em;"> turns into input_message</span>
+    </div>
+  </div>
+
+  <div id="messages"></div>
+
+  <div id="input-row">
+    <input type="text" id="input" placeholder="พิมพ์คำถามภาษาไทย แล้วกด Enter..." autocomplete="off" />
+    <button id="send">Send</button>
+    <button id="clear">Clear</button>
+  </div>
+
+  <div class="meta" id="status">Ready. Session: <span id="sessionId"></span></div>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const messagesEl = $('messages');
+const inputEl = $('input');
+const sendBtn = $('send');
+const clearBtn = $('clear');
+const baseUrlEl = $('baseUrl');
+const apiKeyEl = $('apiKey');
+const useHistoryEl = $('useHistory');
+const historyTurnsEl = $('historyTurns');
+const statusEl = $('status');
+
+['baseUrl', 'apiKey', 'useHistory', 'historyTurns'].forEach(id => {
+  const el = $(id);
+  const saved = localStorage.getItem('chat_' + id);
+  if (saved !== null) {
+    if (el.type === 'checkbox') el.checked = saved === '1';
+    else el.value = saved;
+  }
+  const evt = el.type === 'checkbox' ? 'change' : 'input';
+  el.addEventListener(evt, () => {
+    const v = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
+    localStorage.setItem('chat_' + id, v);
+  });
+});
+
+const sessionId = (crypto.randomUUID && crypto.randomUUID()) || ('s_' + Date.now());
+$('sessionId').textContent = sessionId;
+
+let history = [];
+let streaming = false;
+
+function escapeHtml(s) {
+  return String(s).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function render() {
+  messagesEl.innerHTML = '';
+  for (const m of history) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + m.role + (m.error ? ' error' : '');
+    const roleLabel = m.role === 'user' ? 'คุณ' : 'น้องกอฟ';
+    const bodyHtml = escapeHtml(m.content || '') + (m.streaming ? '<span class="cursor"></span>' : '');
+    div.innerHTML = `<div class="role">${roleLabel}</div><div>${bodyHtml}</div>`;
+    messagesEl.appendChild(div);
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function buildInputMessage(query) {
+  const turns = parseInt(historyTurnsEl.value, 10) || 0;
+  if (!useHistoryEl.checked || turns === 0 || history.length === 0) return query;
+  const recent = history.slice(-turns * 2);
+  const lines = ['<<<การสนทนาก่อนหน้า>>>'];
+  for (const m of recent) {
+    const tag = m.role === 'user' ? 'ผู้ใช้' : 'น้องกอฟ';
+    lines.push(`${tag}: ${m.content}`);
+  }
+  lines.push('<<<คำถามใหม่>>>');
+  lines.push(`ผู้ใช้: ${query}`);
+  return lines.join('\n');
+}
+
+async function sendQuery() {
+  if (streaming) return;
+  const query = inputEl.value.trim();
+  if (!query) return;
+  const baseUrl = baseUrlEl.value.replace(/\/+$/, '');
+  const apiKey = apiKeyEl.value.trim();
+  if (!apiKey) { alert('Please enter API Key first.'); apiKeyEl.focus(); return; }
+
+  inputEl.value = '';
+  streaming = true;
+  sendBtn.disabled = true;
+  statusEl.textContent = 'Streaming…';
+
+  history.push({ role: 'user', content: query });
+  const assistantMsg = { role: 'assistant', content: '', streaming: true };
+  history.push(assistantMsg);
+  render();
+
+  const inputMessage = buildInputMessage(query);
+  const t0 = performance.now();
+
+  try {
+    const resp = await fetch(`${baseUrl}/qa/stream`, {
+      method: 'POST',
+      headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input_message: inputMessage, session_id: sessionId }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      assistantMsg.content = `[HTTP ${resp.status}] ${text || resp.statusText}`;
+      assistantMsg.error = true;
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by blank lines.
+      const events = buf.split('\n\n');
+      buf = events.pop();
+
+      for (const evt of events) {
+        if (!evt.trim()) continue;
+        let eventType = 'message';
+        const dataLines = [];
+        for (const line of evt.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+          else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+        }
+        const dataStr = dataLines.join('\n');
+        let data = null;
+        try { data = JSON.parse(dataStr); } catch {}
+
+        if (eventType === 'message_chunk' && data && data.content) {
+          assistantMsg.content += data.content;
+          render();
+        } else if (eventType === 'tool_message' && data) {
+          assistantMsg.content += `\n[tool: ${data.name || '?'}] ${data.content || ''}\n`;
+          render();
+        } else if (eventType === 'error') {
+          assistantMsg.content += `\n[server error] ${dataStr}`;
+          assistantMsg.error = true;
+          render();
+        }
+        // stream_end / end_of_ai_response: nothing to do — natural EOF follows
+      }
+    }
+  } catch (err) {
+    assistantMsg.content = (assistantMsg.content || '') + `\n[network/CORS error] ${err.message}`;
+    assistantMsg.error = true;
+  } finally {
+    assistantMsg.streaming = false;
+    streaming = false;
+    sendBtn.disabled = false;
+    const dt = ((performance.now() - t0) / 1000).toFixed(1);
+    statusEl.textContent = `Ready. Last turn: ${dt}s · ${assistantMsg.content.length} chars · Session: ${sessionId}`;
+    render();
+    inputEl.focus();
+  }
+}
+
+sendBtn.addEventListener('click', sendQuery);
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendQuery();
+  }
+});
+clearBtn.addEventListener('click', () => {
+  if (streaming) return;
+  history = [];
+  render();
+  statusEl.textContent = 'Cleared. Session: ' + sessionId;
+});
+
+inputEl.focus();
+</script>
+</body>
+</html>
