@@ -78,15 +78,16 @@ app/
 ├── infrastructure/
 │   ├── llm/
 │   │   ├── openai_chat.py        # OpenAIChatProvider (cloud profile)
-│   │   └── llamacpp_local.py     # placeholder for the local GGUF profile
-│   ├── embeddings/hf_bge_m3.py   # HuggingFace BAAI/bge-m3 provider
+│   │   └── ollama_chat.py        # OllamaChatProvider (local profile)
+│   ├── embeddings/
+│   │   ├── ollama_embeddings.py  # OllamaEmbeddingsProvider (runtime)
+│   │   └── hf_bge_m3.py          # HuggingFace BAAI/bge-m3 (offline indexing)
 │   ├── vectorstore/chroma_repo.py
-│   ├── ocr/ollama_client.py        # Ollama Vision OCR adapter (local)
+│   ├── ocr/ollama_client.py        # Ollama Vision OCR adapter
 │   └── persistence/query_log_repo.py  # SQLite-backed user query log
 ├── ingestion/
 │   └── build_index.py       # CLI: PDF → OCR → chunk → embed → Chroma
 ├── routers/chat.py          # transport-only; calls QAService, BackgroundTasks
-├── services/llm_service.py  # legacy LlamaIndex reference (to be ported)
 ├── dependencies.py          # X-API-Key auth via require_api_key
 └── main.py                  # app factory: lifespan, CORS, /healthz, request-id
 
@@ -98,7 +99,9 @@ tests/
 └── test_query_log.py
 
 scripts/
-└── run_local_ocr.py         # offline OCR alternative (Ollama + PyMuPDF)
+├── run_local_ocr.py         # offline OCR alternative (Ollama + PyMuPDF)
+├── eval_retrieval.py        # threshold-tuning eval harness (no LLM)
+└── chat_client.html         # single-file browser test client
 
 data/      # PDFs and OCR output (gitignored)
 storage/   # Chroma index + SQLite query log (gitignored)
@@ -186,11 +189,16 @@ OLLAMA_HOST=http://localhost:11434
 
 # --- Optional overrides (defaults shown) ---
 # RETRIEVAL_K=6
-# RETRIEVAL_SCORE_THRESHOLD=1.5
+# RETRIEVAL_SCORE_THRESHOLD=1.5      # Chroma L2 distance, lower = more similar.
+                                     # Default 1.5 is permissive; eval on the SDD
+                                     # corpus (scripts/eval_retrieval.py) suggests
+                                     # ~1.05 to reject off-topic queries.
 # CHUNK_SIZE=3000
 # CHUNK_OVERLAP=1000
 # MAX_INPUT_CHARS=4000
 ```
+
+> **Gotcha — `OLLAMA_HOST`:** if your shell exports `OLLAMA_HOST=0.0.0.0` (used to make `ollama serve` bind to all interfaces), pydantic-settings will read it and the langchain-ollama client will fail (no scheme/port). Either unset it before starting uvicorn, or override with `$env:OLLAMA_HOST = "http://127.0.0.1:11434"` (PowerShell) / `OLLAMA_HOST=http://127.0.0.1:11434` (bash) when launching the API.
 
 `Settings` validates these at startup and **fails fast** if:
 - `API_KEY` is missing or shorter than 16 characters
@@ -363,13 +371,40 @@ What's covered today:
 
 ---
 
+## Tools & Scripts
+
+### Threshold tuning — `scripts/eval_retrieval.py`
+
+Sweeps `RETRIEVAL_SCORE_THRESHOLD` against a labeled query set (RETRIEVE / EDGE / REFUSE) and reports precision, recall, and F1 per threshold. Hits the live Chroma index directly — **no LLM required**, just embeddings.
+
+```powershell
+$env:OLLAMA_HOST = "http://127.0.0.1:11434"
+$env:PYTHONPATH = (Get-Location).Path
+$env:PYTHONIOENCODING = "utf-8"
+python scripts/eval_retrieval.py
+```
+
+Edit the `QUERIES` list to match your corpus when rebuilding or expanding the index.
+
+### Browser test client — `scripts/chat_client.html`
+
+Single-file HTML page (no build, no dependencies) for hitting `POST /qa/stream` and watching the SSE stream token-by-token. Persists Base URL + API Key in `localStorage`; supports prepending the last N user/assistant turns into `input_message` for client-side multi-turn.
+
+CORS: the file's origin must be in `CORS_ORIGINS` (default only allows `http://localhost:3000`). Either:
+- Add `"null"` to `CORS_ORIGINS` and open via `file://`, or
+- Serve with `python -m http.server 8080` from `scripts/` and add `"http://localhost:8080"` to `CORS_ORIGINS`.
+
+Restart uvicorn after editing `.env`.
+
+---
+
 ## Deployment Profiles
 
-| Target                              | LLM Profile | Notes                                                               |
-| ----------------------------------- | ----------- | ------------------------------------------------------------------- |
-| 🌐 Intranet web app *(active)*      | `cloud`     | OpenAI-fronted, behind PEA's reverse proxy                          |
-| 🏢 Air-gapped intranet *(planned)*  | `local`     | Wire `LlamaCppLocalProvider`; port logic from [app/services/llm_service.py](app/services/llm_service.py) |
-| 💬 LINE chatbot *(planned)*         | `cloud`     | Same backend, separate LINE-webhook adapter on the frontend         |
+| Target                              | LLM Profile | Notes                                                                  |
+| ----------------------------------- | ----------- | ---------------------------------------------------------------------- |
+| 🏢 Air-gapped on-prem *(active)*    | `local`     | Qwen2.5 32B + bge-m3 via Ollama on RTX 3090. Zero cloud calls.         |
+| 🌐 Intranet web app *(legacy)*      | `cloud`     | OpenAI-fronted, behind PEA's reverse proxy. Kept as a fallback profile. |
+| 💬 LINE chatbot *(planned)*         | `local` or `cloud` | Same backend, separate LINE-webhook adapter on the frontend.    |
 
 ---
 
