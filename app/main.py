@@ -1,38 +1,16 @@
-import logging
 import uuid
-from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.core.logging import configure_logging, request_id_ctx
+from app.core.lifespan import lifespan
+from app.core.logging import request_id_ctx
 from app.dependencies import require_api_key
 from app.routers import chat
 
-logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = get_settings()
-    configure_logging(debug=settings.DEBUG)
-    logger.info("Starting application; building RAG graph…")
-
-    from app.services import langgraph_service
-
-    langgraph_service.init_resources()
-    app.state.graph = langgraph_service.build_graph()
-    app.state.ready = True
-    logger.info("Application ready.")
-    try:
-        yield
-    finally:
-        app.state.ready = False
-        logger.info("Application shutting down.")
-
-
 settings = get_settings()
+
 app = FastAPI(
     title="น้องกอฟ — PEA SDD AI Assistant",
     lifespan=lifespan,

@@ -21,6 +21,10 @@ chromadb==1.0.15
 typhoon-ocr==0.4.4
 pypdf==5.1.0
 
+# Test
+pytest==8.3.4
+pytest-asyncio==0.25.0
+
 # Model inference
 torch==2.7.1+cu128
 numpy==2.3.1
