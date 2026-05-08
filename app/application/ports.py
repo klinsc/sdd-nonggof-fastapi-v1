@@ -33,6 +33,7 @@ class VectorStoreRepository(Protocol):
 @runtime_checkable
 class VectorStoreHandle(Protocol):
     def similarity_search(self, query: str, k: int) -> list[Document]: ...
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]: ...
 
 
 @runtime_checkable

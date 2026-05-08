@@ -27,6 +27,9 @@ class FakeVectorStoreHandle:
     def similarity_search(self, query: str, k: int) -> list[Document]:
         return self._docs[:k]
 
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]:
+        return [(doc, 0.5) for doc in self._docs[:k]]  # fake score = 0.5 (passes default threshold)
+
 
 class FakeVectorStoreRepository:
     def __init__(self, docs: list[Document] | None = None) -> None:

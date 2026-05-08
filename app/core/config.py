@@ -28,20 +28,25 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     HF_TOKEN: str | None = None
 
-    # Ollama OCR settings (used by build_index and scripts/run_local_ocr.py)
+    # Ollama server (shared by LLM, embeddings, and OCR)
     OLLAMA_HOST: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen2.5-vl"
+    OLLAMA_OCR_MODEL: str = "qwen2.5-vl"  # vision model for scripts/run_local_ocr.py
 
     DATASET_NAME: str = "sdd-data"
     CHROMA_DIR: str = "storage/chroma_data"
     SQLITE_PATH: str = "storage/app.sqlite3"
 
-    LLM_PROFILE: Literal["cloud", "local"] = "cloud"
-    LLM_MODEL: str = "gpt-4o-mini"
-    LLM_PROVIDER: str = "openai"
-    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    # LLM provider: "cloud" = OpenAI API, "local" = Ollama
+    LLM_PROFILE: Literal["cloud", "local"] = "local"
+    LLM_MODEL: str = "qwen2.5:32b"  # Ollama model name or OpenAI model name
 
-    RETRIEVAL_K: int = 2
+    # Embeddings: "ollama" = via Ollama server, "huggingface" = via PyTorch
+    EMBEDDING_PROFILE: Literal["ollama", "huggingface"] = "ollama"
+    EMBEDDING_MODEL: str = "bge-m3:latest"  # Ollama model or HuggingFace model name
+
+    # Retrieval
+    RETRIEVAL_K: int = 6
+    RETRIEVAL_SCORE_THRESHOLD: float = 1.5  # Chroma L2 distance; lower = more similar
     CHUNK_SIZE: int = 3000
     CHUNK_OVERLAP: int = 1000
 

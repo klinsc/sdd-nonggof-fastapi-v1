@@ -49,3 +49,6 @@ class ChromaHandle:
 
     def similarity_search(self, query: str, k: int) -> list[Document]:
         return self._store.similarity_search(query, k=k)
+
+    def similarity_search_with_score(self, query: str, k: int) -> list[tuple[Document, float]]:
+        return self._store.similarity_search_with_score(query, k=k)

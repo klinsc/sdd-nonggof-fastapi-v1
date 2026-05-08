@@ -1,0 +1,17 @@
+# ── Offline ingestion dependencies ───────────────────────────
+# Used by: scripts/run_local_ocr.py, python -m app.ingestion.build_index
+# Install with: pip install -r requirements-offline.txt
+
+# Inherits all runtime deps
+-r requirements.txt
+
+# Embedding model (HuggingFace, for indexing into ChromaDB)
+torch==2.7.1+cu128
+numpy==2.3.1
+sentence-transformers==5.0.0
+langchain-huggingface==0.3.0
+
+# OCR + PDF rendering (scripts/run_local_ocr.py)
+ollama>=0.4.0
+PyMuPDF>=1.25.0
+Pillow>=10.0.0

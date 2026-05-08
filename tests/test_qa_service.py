@@ -12,6 +12,7 @@ async def test_qa_service_streams_without_real_providers():
         llm=fake_llm(),
         vector_store_repo=FakeVectorStoreRepository(),
         retrieval_k=2,
+        score_threshold=1.5,
     )
     chunks: list = []
     async for chunk in qa.astream("ทดสอบ"):

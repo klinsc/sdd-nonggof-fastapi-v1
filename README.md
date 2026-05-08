@@ -33,46 +33,30 @@
 
 The service is structured around a **hexagonal (ports & adapters) architecture**, which lets us swap the LLM, embeddings, vector store, or OCR provider without touching the application core. Two LLM profiles are supported:
 
-- **`cloud`** (default) — GPT-4o-mini via the OpenAI API.
-- **`local`** (planned) — local GGUF (e.g. Typhoon 2.1 Gemma3 4B) via `llama-cpp-python` for air-gapped intranet deployments.
+- **`local`** (default) — Qwen2.5 32B via Ollama on a local RTX 3090 GPU.
+- **`cloud`** — GPT-4o-mini via the OpenAI API.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Client Layer                             │
-│              Web UI  /  Line Chatbot  /  API Client             │
-└─────────────────────┬───────────────────────────────────────────┘
-                      │  POST /qa/stream  (X-API-Key header)
-                      │  Server-Sent Events response
-                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       FastAPI app                               │
-│  routers/chat.py  →  application/qa_service.py  (use case)      │
-│                          │                                      │
-│                          ▼                                      │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │              LangGraph Agent (in QAService)             │   │
-│   │   query_or_respond  →  retrieve  →  generate            │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│        │              │                  │                      │
-│        ▼              ▼                  ▼                      │
-│   LLMProvider   VectorStoreRepo    QueryLogRepository           │
-│   (port)        (port)             (port)                       │
-│        │              │                  │                      │
-│   ┌────┴───┐    ┌─────┴────┐       ┌─────┴────────┐             │
-│   │OpenAI  │    │Chroma    │       │SQLite        │             │
-│   │ adapter│    │ adapter  │       │ adapter      │             │
-│   └────────┘    └──────────┘       └──────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
-
-         ┌────────────────────────────────────────┐
-         │  Offline ingestion (separate process)  │
-         │  python -m app.ingestion.build_index   │
-         │     PDFs → OCR → chunks → Chroma       │
-         └────────────────────────────────────────┘
+         RUNTIME (always-on, lightweight)           OFFLINE (run once)
+  ┌────────────────────────────────────────┐  ┌──────────────────────────┐
+  │            FastAPI app (~100MB RAM)     │  │  scripts/run_local_ocr   │
+  │  routers/chat.py → qa_service.py       │  │  PyMuPDF + Ollama VLM    │
+  │       │             │                  │  │  PDF → JSON              │
+  │       ▼             ▼                  │  └─────────┬────────────────┘
+  │  LangGraph:  retrieve → generate       │            │
+  │       │             │                  │            ▼
+  │       ▼             ▼                  │  ┌──────────────────────────┐
+  │  ChromaDB    Ollama (LLM + Embed)      │  │  app.ingestion.build_    │
+  │  (read)      ┌──────────────────┐      │  │  index (HuggingFace      │
+  │              │ bge-m3    1.2 GB │      │  │  bge-m3 + ChromaDB)      │
+  │              │ qwen2.5   19 GB  │      │  │  JSON → chunks → Chroma  │
+  │              │ (RTX 3090 24GB)  │      │  └──────────────────────────┘
+  │              └──────────────────┘      │
+  └────────────────────────────────────────┘
 ```
 
 The API process **only reads** the vector store. Re-indexing is an offline job and does not require a redeploy.
@@ -128,11 +112,11 @@ storage/   # Chroma index + SQLite query log (gitignored)
 | --------------- | -------------------------------------------------------- |
 | Framework       | FastAPI 0.115 + Uvicorn                                  |
 | Settings        | pydantic + pydantic-settings                             |
+| LLM (local)     | Qwen2.5 32B via Ollama (RTX 3090)                        |
 | LLM (cloud)     | GPT-4o-mini via OpenAI API                               |
-| LLM (local)     | Typhoon 2.1 Gemma3 4B GGUF via llama-cpp-python *(planned)* |
-| OCR             | Ollama + Vision Model (local, via PyMuPDF + `ollama`)    |
-| PDF rendering   | PyMuPDF (fitz) — renders pages to PNG for OCR            |
-| Embeddings      | BAAI/bge-m3 (HuggingFace, CUDA-accelerated)              |
+| OCR (offline)   | Ollama Vision + PyMuPDF (`scripts/run_local_ocr.py`)     |
+| Embeddings (runtime) | bge-m3 via Ollama (zero PyTorch overhead)            |
+| Embeddings (offline) | bge-m3 via HuggingFace (PyTorch, CUDA)              |
 | RAG orchestrator| LangChain 0.3 + LangGraph                                |
 | Vector DB       | ChromaDB 1.0 (persistent local)                          |
 | Query log       | SQLite (writes off the request hot path)                 |
@@ -144,7 +128,11 @@ storage/   # Chroma index + SQLite query log (gitignored)
 ## Prerequisites
 
 - **Python 3.11** (recommended via Conda)
-- **NVIDIA GPU** with CUDA 12.8+ recommended for embedding inference; CPU works but is slower
+- **NVIDIA GPU** — RTX 3090 (24GB) recommended for local inference
+- **Ollama** — [ollama.com/download](https://ollama.com/download)
+  - `ollama pull qwen2.5:32b` (LLM)
+  - `ollama pull bge-m3` (embeddings)
+  - `ollama pull qwen2.5vl:7b` (OCR, offline only)
 - **Git**
 
 ---
@@ -154,22 +142,21 @@ storage/   # Chroma index + SQLite query log (gitignored)
 ### 1. Conda environment
 
 ```bash
-conda create -n llama-gpu python=3.11 -y
-conda activate llama-gpu
+conda create -n nonggof python=3.11 -y
+conda activate nonggof
 ```
 
 ### 2. Python dependencies
 
+**Runtime (serving):**
 ```bash
 pip install -r requirements.txt
-pip install pydantic-settings
 ```
 
-The Settings class uses `pydantic-settings`; install it explicitly if it is not already pinned in `requirements.txt`.
-
-### 3. (Optional) Local LLM for the air-gapped profile
-
-Build `llama-cpp-python` with CUDA and drop a GGUF model into `models/`. See [app/services/llm_service.py](app/services/llm_service.py) for the legacy LlamaIndex reference that the `LlamaCppLocalProvider` port will replace.
+**Offline (OCR + indexing) — only needed when processing new PDFs:**
+```bash
+pip install -r requirements-offline.txt
+```
 
 ---
 
@@ -183,25 +170,23 @@ API_KEY="generate-a-secret-at-least-16-chars"
 CORS_ORIGINS=["http://localhost:3000","https://sdd.chatbordin.com"]
 
 # --- Runtime profile ---
-LLM_PROFILE=cloud           # one of: cloud | local
+LLM_PROFILE=local           # one of: local | cloud
+LLM_MODEL=qwen2.5:32b       # Ollama model (local) or OpenAI model (cloud)
 DEBUG=false
 
-# --- Cloud-profile secrets ---
-OPENAI_API_KEY="sk-proj-..."
+# --- Embeddings ---
+EMBEDDING_PROFILE=ollama    # one of: ollama | huggingface
+EMBEDDING_MODEL=bge-m3:latest
 
-# --- OCR ingestion (only needed when running build_index) ---
-# OLLAMA_HOST="http://localhost:11434"
-# OLLAMA_MODEL="qwen2.5-vl"
-HF_TOKEN="hf_..."
+# --- Ollama server ---
+OLLAMA_HOST=http://localhost:11434
+
+# --- Cloud profile (only needed when LLM_PROFILE=cloud) ---
+# OPENAI_API_KEY="sk-proj-..."
 
 # --- Optional overrides (defaults shown) ---
-# DATASET_NAME=sdd-data
-# CHROMA_DIR=storage/chroma_data
-# SQLITE_PATH=storage/app.sqlite3
-# LLM_MODEL=gpt-4o-mini
-# LLM_PROVIDER=openai
-# EMBEDDING_MODEL=BAAI/bge-m3
-# RETRIEVAL_K=2
+# RETRIEVAL_K=6
+# RETRIEVAL_SCORE_THRESHOLD=1.5
 # CHUNK_SIZE=3000
 # CHUNK_OVERLAP=1000
 # MAX_INPUT_CHARS=4000
@@ -217,10 +202,10 @@ Required API keys:
 | Key              | Used by                              | Provider                                          |
 | ---------------- | ------------------------------------ | ------------------------------------------------- |
 | `API_KEY`        | Client auth (`X-API-Key` header)     | You — generate and rotate per environment         |
-| `OPENAI_API_KEY` | Cloud LLM profile                    | [platform.openai.com](https://platform.openai.com)|
-| `HF_TOKEN`       | HuggingFace embedding model download | [huggingface.co](https://huggingface.co)          |
+| `OPENAI_API_KEY` | Cloud LLM profile only               | [platform.openai.com](https://platform.openai.com)|
+| `HF_TOKEN`       | Offline indexing (HuggingFace model)  | [huggingface.co](https://huggingface.co)          |
 
-> **Note:** `TYHOON_API_KEY` is no longer required. OCR is handled locally via Ollama.
+> **Note:** For the local profile (`LLM_PROFILE=local`), no cloud API keys are needed. Only `API_KEY` and a running Ollama server are required.
 
 ---
 
@@ -229,6 +214,10 @@ Required API keys:
 The API requires a built vector index. If `storage/chroma_data/` does not exist, run the ingestion CLI first ([Building the Vector Index](#building-the-vector-index)).
 
 ```bash
+# 1. Start Ollama (in a separate terminal)
+ollama serve
+
+# 2. Start FastAPI
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 

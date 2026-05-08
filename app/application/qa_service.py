@@ -1,25 +1,36 @@
+"""QA Service — LangGraph RAG pipeline for PEA substation standards.
+
+Forces retrieval on every query (no LLM-decided skip), filters results by
+score threshold, and generates Thai-language responses citing source documents.
+"""
 from __future__ import annotations
 
 import logging
 from typing import Any, AsyncIterator
 
+from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import tool
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.application.ports import VectorStoreHandle, VectorStoreRepository
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are an assistant for question-answering tasks. "
-    "Use the following pieces of retrieved context to answer the question. "
-    "If you don't know the answer, say that you don't know. "
-    "Use ten sentences maximum."
-    "Respond **only in Thai language**."
-    "\n\n"
+    "คุณคือผู้ช่วยตอบคำถามด้านมาตรฐานการออกแบบสถานีไฟฟ้า 115kV ของการไฟฟ้าส่วนภูมิภาค (กฟภ.)\n"
+    "ใช้เฉพาะข้อมูลที่ค้นพบจากเอกสารมาตรฐานด้านล่างในการตอบคำถาม\n\n"
+    "กฎ:\n"
+    "1. ตอบเป็นภาษาไทยเท่านั้น\n"
+    "2. อ้างอิงแหล่งที่มา (ชื่อไฟล์เอกสาร) ทุกครั้งที่ตอบ\n"
+    "3. ถ้าไม่มีข้อมูลที่เกี่ยวข้อง ให้ตอบว่า 'ไม่พบข้อมูลที่เกี่ยวข้องในเอกสารมาตรฐาน'\n"
+    "4. ใช้คำศัพท์วิศวกรรมภาษาอังกฤษตามต้นฉบับ เช่น 115kV, Transformer, Bus Bar\n"
+    "5. ตอบกระชับ ไม่เกิน 10 ประโยค\n\n"
+    "เอกสารอ้างอิง:\n"
+)
+
+_NO_CONTEXT_MSG = (
+    "ไม่พบข้อมูลที่เกี่ยวข้องเพียงพอในเอกสารมาตรฐาน กรุณาลองถามใหม่ด้วยคำค้นที่เฉพาะเจาะจงมากขึ้น"
 )
 
 
@@ -45,9 +56,9 @@ def _coerce_text(content: Any) -> str:
 class QAService:
     """Use case: orchestrates retrieval + generation as a LangGraph.
 
-    The graph itself is built once at startup; per-request work happens in
-    `astream`. Persistence and provider construction are injected — this
-    class knows nothing about Chroma, OpenAI, or SQLite directly.
+    The graph is built once at startup.  Retrieval is **forced** on every
+    query — the LLM never decides whether to skip it.  Retrieved documents
+    are filtered by score threshold before being injected into the prompt.
     """
 
     def __init__(
@@ -55,10 +66,12 @@ class QAService:
         llm: BaseChatModel,
         vector_store_repo: VectorStoreRepository,
         retrieval_k: int,
+        score_threshold: float = 1.5,
     ) -> None:
         self._llm = llm
         self._vector_store_repo = vector_store_repo
         self._retrieval_k = retrieval_k
+        self._score_threshold = score_threshold
         self._cached_handle: VectorStoreHandle | None = None
         self._graph = self._build_graph()
 
@@ -72,58 +85,71 @@ class QAService:
             self._cached_handle = self._vector_store_repo.open()
         return self._cached_handle
 
+    def _retrieve_and_filter(self, query: str) -> tuple[str, list[Document]]:
+        """Fetch k candidates, filter by score threshold, return serialized context."""
+        handle = self._vector_store()
+        results = handle.similarity_search_with_score(query, k=self._retrieval_k)
+
+        # Filter by score threshold (Chroma L2 distance: lower = better)
+        filtered = [
+            (doc, score)
+            for doc, score in results
+            if score <= self._score_threshold
+        ]
+
+        logger.info(
+            "Retrieval: %d candidates, %d passed threshold (%.2f)",
+            len(results),
+            len(filtered),
+            self._score_threshold,
+        )
+
+        if not filtered:
+            return _NO_CONTEXT_MSG, []
+
+        docs = [doc for doc, _ in filtered]
+        serialized = "\n\n".join(
+            f"[แหล่งอ้างอิง: {d.metadata.get('source', 'unknown')}]\n{d.page_content}"
+            for d in docs
+        )
+        return serialized, docs
+
     def _build_graph(self):
-        retrieval_k = self._retrieval_k
-        get_store = self._vector_store
         llm = self._llm
+        retrieve_fn = self._retrieve_and_filter
 
-        @tool(response_format="content_and_artifact")
-        def retrieve(query: str):
-            """Retrieve information related to a query."""
-            handle = get_store()
-            docs = handle.similarity_search(query, k=retrieval_k)
-            serialized = "\n\n".join(
-                f"Source: {d.metadata}\nContent: {d.page_content}" for d in docs
-            )
-            return serialized, docs
+        def retrieve(state: MessagesState):
+            """Always retrieve context for the latest human message."""
+            # Find the latest human message
+            human_msg = ""
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, HumanMessage):
+                    human_msg = _coerce_text(msg.content)
+                    break
 
-        llm_with_tools = llm.bind_tools([retrieve])
+            context, docs = retrieve_fn(human_msg)
 
-        def query_or_respond(state: MessagesState):
-            response = llm_with_tools.invoke(state["messages"])
-            return {"messages": [response]}
+            # Inject context as a system message
+            system = SystemMessage(_SYSTEM_PROMPT + context)
 
-        tools_node = ToolNode([retrieve])
+            return {"messages": [system]}
 
         def generate(state: MessagesState):
-            recent_tool_messages = []
-            for message in reversed(state["messages"]):
-                if message.type == "tool":
-                    recent_tool_messages.append(message)
-                else:
-                    break
-            tool_messages = recent_tool_messages[::-1]
-            docs_content = "\n\n".join(m.content for m in tool_messages)
-            system = SystemMessage(_SYSTEM_PROMPT + docs_content)
-
-            conversation = [
-                m
-                for m in state["messages"]
-                if m.type in ("human", "system")
-                or (m.type == "ai" and not m.tool_calls)
+            """Generate a response using the LLM with retrieved context."""
+            # Collect system + human messages (skip intermediate state)
+            messages = [
+                m for m in state["messages"]
+                if isinstance(m, (SystemMessage, HumanMessage))
+                or (isinstance(m, AIMessage) and not getattr(m, "tool_calls", None))
             ]
-            response = llm.invoke([system] + conversation)
+            response = llm.invoke(messages)
             return {"messages": [response]}
 
         builder = StateGraph(MessagesState)
-        builder.add_node("query_or_respond", query_or_respond)
-        builder.add_node("tools", tools_node)
+        builder.add_node("retrieve", retrieve)
         builder.add_node("generate", generate)
-        builder.set_entry_point("query_or_respond")
-        builder.add_conditional_edges(
-            "query_or_respond", tools_condition, {END: END, "tools": "tools"}
-        )
-        builder.add_edge("tools", "generate")
+        builder.set_entry_point("retrieve")
+        builder.add_edge("retrieve", "generate")
         builder.add_edge("generate", END)
         return builder.compile()
 
