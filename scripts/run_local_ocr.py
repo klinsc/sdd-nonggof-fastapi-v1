@@ -97,12 +97,16 @@ def render_page_to_base64(
     """
     Render a fitz.Page to a base64-encoded PNG string.
 
-    Auto-corrects page rotation so the vision model always receives an
-    upright image regardless of the PDF's native /Rotate metadata.
+    - Auto-corrects page rotation so the vision model always receives an
+      upright image regardless of the PDF's native /Rotate metadata.
+    - Resizes the image so both dimensions are divisible by 28 (the patch
+      size used by Qwen2.5-VL's vision encoder), preventing GGML_ASSERT
+      tensor shape mismatches.
     """
+    import io
+    from PIL import Image
+
     # --- Auto-correct rotation -------------------------------------------
-    # page.rotation returns the effective rotation (0, 90, 180, 270).
-    # Setting it to 0 before rendering ensures the pixmap is upright.
     rotation = page.rotation
     if rotation != 0:
         page.set_rotation(0)
@@ -116,7 +120,19 @@ def render_page_to_base64(
     if rotation != 0:
         page.set_rotation(rotation)
 
-    return base64.b64encode(png_bytes).decode("utf-8")
+    # --- Resize to dimensions divisible by 28 (vision encoder patch size) -
+    PATCH_SIZE = 28
+    img = Image.open(io.BytesIO(png_bytes))
+    w, h = img.size
+    new_w = (w // PATCH_SIZE) * PATCH_SIZE
+    new_h = (h // PATCH_SIZE) * PATCH_SIZE
+
+    if new_w != w or new_h != h:
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def call_ollama_vision(
@@ -228,21 +244,27 @@ def process_pdf(
 
         t0 = time.time()
 
-        # Render page to base64 image (auto-corrects rotation)
-        image_b64 = render_page_to_base64(page, dpi=dpi)
+        try:
+            # Render page to base64 image (auto-corrects rotation)
+            image_b64 = render_page_to_base64(page, dpi=dpi)
 
-        # Call Ollama
-        page_data = call_ollama_vision(client, image_b64, filename, page_num, model)
-        elapsed = time.time() - t0
-        print(f"done ({elapsed:.1f}s)")
+            # Call Ollama
+            page_data = call_ollama_vision(client, image_b64, filename, page_num, model)
+            elapsed = time.time() - t0
+            print(f"done ({elapsed:.1f}s)")
 
-        pages_data.append(page_data)
-        combined_markdown += page_data.get("content_markdown", "") + "\n"
+            pages_data.append(page_data)
+            combined_markdown += page_data.get("content_markdown", "") + "\n"
 
-        # Early stop if "จึงเรียน" (formal closing phrase) is detected
-        if "จึงเรียน" in page_data.get("content_markdown", ""):
-            print(f"      ⏹️  Detected closing phrase 'จึงเรียน' — stopping early.")
-            break
+            # Early stop if "จึงเรียน" (formal closing phrase) is detected
+            if "จึงเรียน" in page_data.get("content_markdown", ""):
+                print(f"      ⏹️  Detected closing phrase 'จึงเรียน' — stopping early.")
+                break
+
+        except Exception as page_err:
+            elapsed = time.time() - t0
+            print(f"⚠️  page failed ({elapsed:.1f}s): {page_err}")
+            continue  # Skip this page, proceed with the rest
 
     doc.close()
 

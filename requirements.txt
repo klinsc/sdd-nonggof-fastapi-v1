@@ -28,3 +28,4 @@ numpy==2.3.1
 # Offline OCR ingestion (scripts/run_local_ocr.py)
 ollama>=0.4.0
 PyMuPDF>=1.25.0
+Pillow>=10.0.0
