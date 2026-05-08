@@ -26,8 +26,11 @@ class Settings(BaseSettings):
     )
 
     OPENAI_API_KEY: str | None = None
-    TYHOON_API_KEY: str | None = None
     HF_TOKEN: str | None = None
+
+    # Ollama OCR settings (used by build_index and scripts/run_local_ocr.py)
+    OLLAMA_HOST: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5-vl"
 
     DATASET_NAME: str = "sdd-data"
     CHROMA_DIR: str = "storage/chroma_data"

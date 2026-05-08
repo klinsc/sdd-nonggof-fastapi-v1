@@ -97,7 +97,7 @@ app/
 │   │   └── llamacpp_local.py     # placeholder for the local GGUF profile
 │   ├── embeddings/hf_bge_m3.py   # HuggingFace BAAI/bge-m3 provider
 │   ├── vectorstore/chroma_repo.py
-│   ├── ocr/typhoon_client.py     # Typhoon OCR API client
+│   ├── ocr/ollama_client.py        # Ollama Vision OCR adapter (local)
 │   └── persistence/query_log_repo.py  # SQLite-backed user query log
 ├── ingestion/
 │   └── build_index.py       # CLI: PDF → OCR → chunk → embed → Chroma
@@ -130,8 +130,8 @@ storage/   # Chroma index + SQLite query log (gitignored)
 | Settings        | pydantic + pydantic-settings                             |
 | LLM (cloud)     | GPT-4o-mini via OpenAI API                               |
 | LLM (local)     | Typhoon 2.1 Gemma3 4B GGUF via llama-cpp-python *(planned)* |
-| OCR (online)    | Typhoon OCR (OpenTyphoon API)                            |
-| OCR (offline)   | `scripts/run_local_ocr.py` (Ollama + PyMuPDF)            |
+| OCR             | Ollama + Vision Model (local, via PyMuPDF + `ollama`)    |
+| PDF rendering   | PyMuPDF (fitz) — renders pages to PNG for OCR            |
 | Embeddings      | BAAI/bge-m3 (HuggingFace, CUDA-accelerated)              |
 | RAG orchestrator| LangChain 0.3 + LangGraph                                |
 | Vector DB       | ChromaDB 1.0 (persistent local)                          |
@@ -190,7 +190,8 @@ DEBUG=false
 OPENAI_API_KEY="sk-proj-..."
 
 # --- OCR ingestion (only needed when running build_index) ---
-TYHOON_API_KEY="sk-..."
+# OLLAMA_HOST="http://localhost:11434"
+# OLLAMA_MODEL="qwen2.5-vl"
 HF_TOKEN="hf_..."
 
 # --- Optional overrides (defaults shown) ---
@@ -217,8 +218,9 @@ Required API keys:
 | ---------------- | ------------------------------------ | ------------------------------------------------- |
 | `API_KEY`        | Client auth (`X-API-Key` header)     | You — generate and rotate per environment         |
 | `OPENAI_API_KEY` | Cloud LLM profile                    | [platform.openai.com](https://platform.openai.com)|
-| `TYHOON_API_KEY` | OCR ingestion                        | [opentyphoon.ai](https://api.opentyphoon.ai)      |
 | `HF_TOKEN`       | HuggingFace embedding model download | [huggingface.co](https://huggingface.co)          |
+
+> **Note:** `TYHOON_API_KEY` is no longer required. OCR is handled locally via Ollama.
 
 ---
 
@@ -250,6 +252,9 @@ python -m app.ingestion.build_index --rebuild
 
 # Custom directories:
 python -m app.ingestion.build_index --source data/standards --ocr-out data/standards_json --rebuild
+
+# Use a specific Ollama model / host:
+python -m app.ingestion.build_index --rebuild --model qwen2.5vl:7b --host http://localhost:11434
 ```
 
 Flags:
@@ -259,10 +264,12 @@ Flags:
 | `--source`   | Directory of source PDFs (default `data/sdd-data`)               |
 | `--ocr-out`  | Where to write OCR JSON cache (default `data/sdd-data_json`)     |
 | `--rebuild`  | Force re-indexing even if `CHROMA_DIR` already exists            |
+| `--model`    | Ollama vision model for OCR (default `qwen2.5-vl`)               |
+| `--host`     | Ollama server URL (default `http://localhost:11434`)              |
 
 OCR JSONs are cached on disk; rerunning is idempotent for files that have already been processed.
 
-> **Offline OCR alternative:** [scripts/run_local_ocr.py](scripts/run_local_ocr.py) (Ollama + PyMuPDF) is available for environments where the Typhoon OCR API cannot be reached. The resulting JSONs are consumed by `build_index` exactly as if they came from Typhoon.
+> **Standalone OCR script:** [scripts/run_local_ocr.py](scripts/run_local_ocr.py) is also available as a lightweight alternative that runs without FastAPI dependencies.
 
 ---
 

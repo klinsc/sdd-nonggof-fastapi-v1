@@ -21,7 +21,7 @@ from langchain_core.documents import Document
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.infrastructure.embeddings.hf_bge_m3 import HuggingFaceEmbeddingsProvider
-from app.infrastructure.ocr.typhoon_client import TyphoonOCRClient
+from app.infrastructure.ocr.ollama_client import OllamaOCRClient
 from app.infrastructure.vectorstore.chroma_repo import ChromaVectorStoreRepository
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def _clean(doc: Document) -> Document:
 def ocr_corpus(
     source_dir: str,
     ocr_output_dir: str,
-    ocr: TyphoonOCRClient,
+    ocr: OllamaOCRClient,
     skip: Iterable[str] = DEFAULT_PROBLEMATIC_FILES,
 ) -> list[Document]:
     os.makedirs(ocr_output_dir, exist_ok=True)
@@ -103,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--rebuild", action="store_true", help="Rebuild even if a Chroma index already exists"
     )
+    parser.add_argument(
+        "--model", default="qwen2.5-vl", help="Ollama vision model for OCR (default: qwen2.5-vl)"
+    )
+    parser.add_argument(
+        "--host", default="http://localhost:11434", help="Ollama server URL (default: http://localhost:11434)"
+    )
     args = parser.parse_args(argv)
 
     embeddings = HuggingFaceEmbeddingsProvider(settings).build()
@@ -115,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    ocr = TyphoonOCRClient(settings.TYHOON_API_KEY)
+    ocr = OllamaOCRClient(host=args.host, model=args.model)
     docs = ocr_corpus(args.source, args.ocr_out, ocr)
     if not docs:
         logger.error("No documents loaded; aborting index build.")

@@ -2,6 +2,7 @@
 fastapi==0.115.14
 uvicorn==0.35.0
 pydantic==2.11.7
+pydantic-settings==2.10.1
 python-dotenv==1.1.1
 
 # LLM + LangChain ecosystem
@@ -17,19 +18,15 @@ langgraph>=0.4.0
 # Vector store
 chromadb==1.0.15
 
-# OCR + PDF
-typhoon-ocr==0.4.4
-pypdf==5.1.0
+# OCR + PDF (Ollama local vision model)
+ollama>=0.4.0
+PyMuPDF>=1.25.0
+Pillow>=10.0.0
 
 # Test
 pytest==8.3.4
 pytest-asyncio==0.25.0
 
-# Model inference
+# Inference (GPU)
 torch==2.7.1+cu128
 numpy==2.3.1
-
-# Offline OCR ingestion (scripts/run_local_ocr.py)
-ollama>=0.4.0
-PyMuPDF>=1.25.0
-Pillow>=10.0.0
