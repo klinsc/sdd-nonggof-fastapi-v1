@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\klins\\\\GitHub\\\\sdd-nonggof-fastapi-v1\" -Recurse -Force)",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "PowerShell($lines = Get-Content \"C:\\\\Users\\\\klins\\\\.claude\\\\projects\\\\c--Users-klins-Documents-github-sdd-nonggof-fastapi-v1\\\\e0361fe0-2b02-4331-a6a2-c56f5babacf7\\\\tool-results\\\\bd13ljz0e.txt\"; $chunks = $lines | Where-Object { $_ -match '^data: \\\\{\"type\": \"ai_chunk\"' }; Write-Output \"Total ai_chunk events: $\\($chunks.Count\\)\"; $full = \"\"; foreach \\($l in $chunks\\) { $j = $l.Substring\\(6\\) | ConvertFrom-Json; $full += $j.content }; Write-Output \"---FULL RECONSTRUCTED MESSAGE---\"; Write-Output $full; Write-Output \"---STREAM END EVENTS---\"; $lines | Where-Object { $_ -match 'stream_end|end_of_ai|error' } | Select-Object -Last 5)"
     ]
   }
 }

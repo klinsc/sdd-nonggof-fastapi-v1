@@ -25,7 +25,11 @@ class SqliteQueryLogRepository:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with sqlite3.connect(self._path) as conn:
+        # sqlite3 context manager only commits — it does not close the
+        # connection, so on Windows the file stays locked until GC.
+        # Use try/finally to guarantee close.
+        conn = sqlite3.connect(self._path)
+        try:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_queries (
@@ -42,6 +46,8 @@ class SqliteQueryLogRepository:
                 "ON user_queries (session_id, created_at)"
             )
             conn.commit()
+        finally:
+            conn.close()
 
     def save(
         self,
@@ -56,7 +62,8 @@ class SqliteQueryLogRepository:
             except (TypeError, ValueError):
                 meta_str = str(metadata)
         try:
-            with sqlite3.connect(self._path) as conn:
+            conn = sqlite3.connect(self._path)
+            try:
                 conn.execute(
                     "INSERT INTO user_queries (created_at, session_id, content, metadata) "
                     "VALUES (?, ?, ?, ?)",
@@ -68,5 +75,7 @@ class SqliteQueryLogRepository:
                     ),
                 )
                 conn.commit()
+            finally:
+                conn.close()
         except Exception as exc:
             logger.warning("failed to save user query: %s", exc)

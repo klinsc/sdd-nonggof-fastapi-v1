@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 from app.application.qa_service import QAService
 from app.application.ports import QueryLogRepository
 from app.core.config import get_settings
+from app.dependencies import require_api_key
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/qa",
     tags=["qa"],
+    dependencies=[Depends(require_api_key)],
     responses={404: {"description": "Not found"}},
 )
 

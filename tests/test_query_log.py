@@ -13,9 +13,12 @@ def test_save_writes_row(cleanup_tmp_storage):
     repo = SqliteQueryLogRepository(settings)
     repo.save("hello", session_id="s1", metadata={"k": "v"})
 
-    with sqlite3.connect(settings.SQLITE_PATH) as conn:
+    conn = sqlite3.connect(settings.SQLITE_PATH)
+    try:
         rows = conn.execute(
             "SELECT content, session_id FROM user_queries WHERE session_id = ?", ("s1",)
         ).fetchall()
+    finally:
+        conn.close()
     assert any(r[0] == "hello" and r[1] == "s1" for r in rows)
     assert os.path.exists(settings.SQLITE_PATH)

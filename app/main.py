@@ -1,12 +1,11 @@
 import uuid
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.lifespan import lifespan
 from app.core.logging import request_id_ctx
-from app.dependencies import require_api_key
 from app.routers import chat
 
 settings = get_settings()
@@ -14,7 +13,6 @@ settings = get_settings()
 app = FastAPI(
     title="น้องกอฟ — PEA SDD AI Assistant",
     lifespan=lifespan,
-    dependencies=[Depends(require_api_key)],
 )
 
 app.add_middleware(
@@ -41,12 +39,12 @@ async def request_id_middleware(request: Request, call_next):
 app.include_router(chat.router)
 
 
-@app.get("/", dependencies=[])
+@app.get("/")
 async def root():
     return {"message": "Hello Bigger Applications!"}
 
 
-@app.get("/healthz", dependencies=[])
+@app.get("/healthz")
 async def healthz(request: Request):
     ready = bool(getattr(request.app.state, "ready", False))
     return {"status": "ok" if ready else "starting", "ready": ready}
