@@ -5,474 +5,375 @@
 
 ---
 
+> ⚠️ **Breaking change for existing clients.** `GET /qa/stream?token=jessica&...` is removed. The new shape is `POST /qa/stream` with an `X-API-Key` header and a JSON body. **See [MIGRATION.md](MIGRATION.md)** for drop-in cURL/browser replacements and the new status-code contract.
+
+---
+
 ## 📑 Table of Contents
 
 - [Overview](#overview)
-- [Objectives](#objectives)
-- [System Architecture](#system-architecture)
-- [Tech Stack](#tech-stack)
+- [Architecture](#architecture)
 - [Project Structure](#project-structure)
+- [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Running the Server](#running-the-server)
+- [Building the Vector Index](#building-the-vector-index)
 - [API Reference](#api-reference)
-- [Core Services](#core-services)
-- [Data Pipeline](#data-pipeline)
-- [Deployment Targets](#deployment-targets)
-- [Key Features](#key-features)
-- [Benefits](#benefits)
+- [Testing](#testing)
+- [Deployment Profiles](#deployment-profiles)
 - [Contact](#contact)
 
 ---
 
 ## Overview
 
-**น้องกอฟ** is the backend service for PEA's Substation Design & Standards AI Assistant. It provides an intelligent question-answering system that retrieves relevant information from PEA's 115kV substation standard documents and generates accurate, Thai-language responses using a RAG (Retrieval-Augmented Generation) pipeline.
+**น้องกอฟ** is the backend service for PEA's Substation Design & Standards AI Assistant. It exposes a streaming question-answering API that retrieves relevant passages from PEA's 115kV substation standard documents and generates Thai-language responses using a RAG (Retrieval-Augmented Generation) pipeline.
 
-This repository contains the **FastAPI backend** server, which exposes streaming chat endpoints powered by:
+The service is structured around a **hexagonal (ports & adapters) architecture**, which lets us swap the LLM, embeddings, vector store, or OCR provider without touching the application core. Two LLM profiles are supported:
 
-- **Ollama (Local Vision Model)** — for offline OCR extraction from PDF documents (`scripts/run_local_ocr.py`)
-- **LangChain + LangGraph** — for orchestrating the RAG pipeline
-- **ChromaDB** — as the vector database for semantic search
-- **GPT-4o-mini** — as the LLM for response generation
-- **BAAI/bge-m3** — as the embedding model for document vectorization
-
-> **Decoupled Architecture:** Document ingestion (OCR) runs **offline** via a standalone script.
-> The FastAPI server only loads pre-processed JSON files — no cloud OCR API calls at runtime.
+- **`cloud`** (default) — GPT-4o-mini via the OpenAI API.
+- **`local`** (planned) — local GGUF (e.g. Typhoon 2.1 Gemma3 4B) via `llama-cpp-python` for air-gapped intranet deployments.
 
 ---
 
-## Objectives
-
-- ⏱️ **ลดเวลาในการค้นหาเอกสารมาตรฐาน** — Reduce time spent searching standard documents
-- ✅ **เพิ่มความถูกต้องในการอ้างอิงข้อมูล** — Improve accuracy in document referencing
-- 👷 **สนับสนุนบุคลากรด้านวิศวกรรมสถานีไฟฟ้า** — Support substation engineering personnel
-- 📚 **สร้าง Knowledge Base กลางสำหรับองค์กร** — Build a centralized organizational Knowledge Base
-
----
-
-## System Architecture
+## Architecture
 
 ```
- ╔══════════════════════════════════════════════════════════════════╗
- ║              OFFLINE — Document Ingestion Pipeline              ║
- ║                  (scripts/run_local_ocr.py)                     ║
- ║                                                                 ║
- ║  PDF Files ──▶ PyMuPDF (render) ──▶ Ollama Vision Model ──▶ JSON║
- ║  (data/sdd-data/)                           (data/sdd-data_json/)║
- ╚══════════════════════════════════════════════════════════════════╝
-                              │
-                    Pre-processed JSON files
-                              │
-                              ▼
- ╔══════════════════════════════════════════════════════════════════╗
- ║              ONLINE — FastAPI Server (this repo)                ║
- ║                                                                 ║
- ║  ┌─────────────┐    ┌────────────────────────────────────────┐  ║
- ║  │  /qa/stream  │───▶│        LangGraph Agent Pipeline        │  ║
- ║  │   (Router)   │    │                                        │  ║
- ║  └─────────────┘    │  query_or_respond → retrieve → generate│  ║
- ║                      └────────────────────────────────────────┘  ║
- ║                                                                 ║
- ║  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐   ║
- ║  │   ChromaDB   │    │   SQLite DB   │    │  JSON Loader     │   ║
- ║  │ (Vector Store)│    │ (Query Log)  │    │ (No cloud API)   │   ║
- ║  └──────────────┘    └──────────────┘    └──────────────────┘   ║
- ╚══════════════════════════════════════════════════════════════════╝
-                              ▲
-                   SSE (Server-Sent Events)
-                              │
- ┌──────────────────────────────────────────────────────────────────┐
- │                        Client Layer                              │
- │              Web UI  /  Line Chatbot  /  API Client              │
- └──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Client Layer                             │
+│              Web UI  /  Line Chatbot  /  API Client             │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │  POST /qa/stream  (X-API-Key header)
+                      │  Server-Sent Events response
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       FastAPI app                               │
+│  routers/chat.py  →  application/qa_service.py  (use case)      │
+│                          │                                      │
+│                          ▼                                      │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │              LangGraph Agent (in QAService)             │   │
+│   │   query_or_respond  →  retrieve  →  generate            │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│        │              │                  │                      │
+│        ▼              ▼                  ▼                      │
+│   LLMProvider   VectorStoreRepo    QueryLogRepository           │
+│   (port)        (port)             (port)                       │
+│        │              │                  │                      │
+│   ┌────┴───┐    ┌─────┴────┐       ┌─────┴────────┐             │
+│   │OpenAI  │    │Chroma    │       │SQLite        │             │
+│   │ adapter│    │ adapter  │       │ adapter      │             │
+│   └────────┘    └──────────┘       └──────────────┘             │
+└─────────────────────────────────────────────────────────────────┘
+
+         ┌────────────────────────────────────────┐
+         │  Offline ingestion (separate process)  │
+         │  python -m app.ingestion.build_index   │
+         │     PDFs → OCR → chunks → Chroma       │
+         └────────────────────────────────────────┘
 ```
 
-### Pipeline Workflow
-
-```
-[OFFLINE]  PDF Documents
-             → PyMuPDF (render pages to base64 PNG)
-             → Ollama Vision Model (extract text + tables as Markdown)
-             → JSON files saved to data/sdd-data_json/
-
-[ONLINE]   JSON files loaded at server startup
-             → Text Chunking (RecursiveCharacterTextSplitter, 3000 tokens, 1000 overlap)
-             → Embedding (BAAI/bge-m3 via HuggingFace)
-             → ChromaDB Vector Store
-             → User Query (via /qa/stream SSE endpoint)
-             → LangGraph Agent (query_or_respond → retrieve → generate)
-             → Streamed AI Response (Thai language)
-```
-
----
-
-## Tech Stack
-
-| Category          | Technology                                              |
-| ----------------- | ------------------------------------------------------- |
-| **Framework**     | FastAPI 0.115 + Uvicorn                                 |
-| **LLM**          | GPT-4o-mini (via OpenAI API)                            |
-| **OCR Engine**   | Ollama + Vision Model (local, offline via `scripts/run_local_ocr.py`) |
-| **PDF Renderer** | PyMuPDF (fitz) — renders PDF pages to PNG for OCR      |
-| **Embeddings**   | BAAI/bge-m3 (HuggingFace, CUDA-accelerated)            |
-| **RAG Pipeline** | LangChain 0.3 + LangGraph                              |
-| **Vector DB**    | ChromaDB 1.0 (with persistent local storage)            |
-| **Database**     | SQLite (for query logging)                              |
-| **GPU Support**  | PyTorch 2.7 + CUDA 12.8                                |
-| **Language**     | Python 3.11                                             |
+The API process **only reads** the vector store. Re-indexing is an offline job and does not require a redeploy.
 
 ---
 
 ## Project Structure
 
 ```
-sdd-nonggof-fastapi-v1/
-├── scripts/                      # Offline tooling
-│   └── run_local_ocr.py          # 🔑 Offline OCR ingestion (Ollama + PyMuPDF)
-├── app/                          # Main application package
-│   ├── __init__.py
-│   ├── main.py                   # FastAPI app entry point, CORS config, router registration
-│   ├── config.py                 # Environment variable configuration (VarSettings)
-│   ├── dependencies.py           # FastAPI dependency injection (auth tokens)
-│   ├── routers/                  # API route handlers
-│   │   ├── __init__.py
-│   │   ├── chat.py               # /qa/stream — SSE streaming chat endpoint
-│   │   ├── items.py              # (placeholder) Item CRUD routes
-│   │   └── users.py              # (placeholder) User routes
-│   ├── services/                 # Core business logic
-│   │   ├── __init__.py
-│   │   ├── langgraph_service.py  # 🔑 Online RAG pipeline (JSON → Embed → Retrieve → Generate)
-│   │   └── llm_service.py        # (deprecated) LlamaIndex-based pipeline
-│   └── internal/                 # Internal admin modules
-│       ├── __init__.py
-│       └── admin.py              # Admin endpoint (placeholder)
-├── data/                         # Document storage (gitignored)
-│   ├── manuals/                  # Manual documents
-│   ├── sdd-data/                 # Source PDF files (input for offline OCR)
-│   ├── sdd-data_json/            # Pre-processed JSON files (output of offline OCR)
-│   ├── standards/                # Standard documents
-│   └── standards_json/           # Pre-processed JSON for standards
-├── models/                       # LLM model files (gitignored)
-├── storage/                      # Persistent storage (gitignored)
-│   ├── app.sqlite3               # SQLite database for user query logging
-│   └── chroma_data/              # ChromaDB vector store data
-├── .env                          # Environment variables (gitignored)
-├── .gitignore
-├── requirements.txt              # Python dependencies
-└── README.md                     # This file
+app/
+├── application/
+│   ├── ports.py             # Protocols: LLMProvider, EmbeddingsProvider,
+│   │                        # VectorStoreRepository, QueryLogRepository
+│   └── qa_service.py        # QAService — owns the LangGraph; ports injected
+├── core/
+│   ├── config.py            # pydantic Settings (env-driven, fail-fast)
+│   ├── lifespan.py          # builds adapters and wires QAService onto app.state
+│   └── logging.py           # JSON logger + request_id ContextVar
+├── infrastructure/
+│   ├── llm/
+│   │   ├── openai_chat.py        # OpenAIChatProvider (cloud profile)
+│   │   └── llamacpp_local.py     # placeholder for the local GGUF profile
+│   ├── embeddings/hf_bge_m3.py   # HuggingFace BAAI/bge-m3 provider
+│   ├── vectorstore/chroma_repo.py
+│   ├── ocr/typhoon_client.py     # Typhoon OCR API client
+│   └── persistence/query_log_repo.py  # SQLite-backed user query log
+├── ingestion/
+│   └── build_index.py       # CLI: PDF → OCR → chunk → embed → Chroma
+├── routers/chat.py          # transport-only; calls QAService, BackgroundTasks
+├── services/llm_service.py  # legacy LlamaIndex reference (to be ported)
+├── dependencies.py          # X-API-Key auth via require_api_key
+└── main.py                  # app factory: lifespan, CORS, /healthz, request-id
+
+tests/
+├── conftest.py
+├── fakes.py                 # FakeListChatModel, FakeVectorStoreRepository
+├── test_health_and_auth.py
+├── test_qa_service.py
+└── test_query_log.py
+
+scripts/
+└── run_local_ocr.py         # offline OCR alternative (Ollama + PyMuPDF)
+
+data/      # PDFs and OCR output (gitignored)
+storage/   # Chroma index + SQLite query log (gitignored)
 ```
+
+---
+
+## Tech Stack
+
+| Category        | Technology                                               |
+| --------------- | -------------------------------------------------------- |
+| Framework       | FastAPI 0.115 + Uvicorn                                  |
+| Settings        | pydantic + pydantic-settings                             |
+| LLM (cloud)     | GPT-4o-mini via OpenAI API                               |
+| LLM (local)     | Typhoon 2.1 Gemma3 4B GGUF via llama-cpp-python *(planned)* |
+| OCR (online)    | Typhoon OCR (OpenTyphoon API)                            |
+| OCR (offline)   | `scripts/run_local_ocr.py` (Ollama + PyMuPDF)            |
+| Embeddings      | BAAI/bge-m3 (HuggingFace, CUDA-accelerated)              |
+| RAG orchestrator| LangChain 0.3 + LangGraph                                |
+| Vector DB       | ChromaDB 1.0 (persistent local)                          |
+| Query log       | SQLite (writes off the request hot path)                 |
+| Tests           | pytest + pytest-asyncio                                  |
+| Language        | Python 3.11                                              |
 
 ---
 
 ## Prerequisites
 
 - **Python 3.11** (recommended via Conda)
-- **NVIDIA GPU** with CUDA support (recommended for embedding inference)
-- **CUDA Toolkit 12.8+** and **cuDNN**
-- **Ollama** installed and running locally (for offline OCR ingestion)
+- **NVIDIA GPU** with CUDA 12.8+ recommended for embedding inference; CPU works but is slower
 - **Git**
 
 ---
 
 ## Installation
 
-### 1. Create Conda Environment
+### 1. Conda environment
 
 ```bash
 conda create -n llama-gpu python=3.11 -y
 conda activate llama-gpu
 ```
 
-### 2. Install System Dependencies
-
-```bash
-conda install -c conda-forge cmake ninja git -y
-conda install -c nvidia cuda-toolkit -y
-conda install -c nvidia cudnn -y
-```
-
-### 3. Install llama-cpp-python with CUDA Support
-
-```bash
-git clone --recurse-submodules https://github.com/abetlen/llama-cpp-python.git
-cd llama-cpp-python
-set LLAMA_CUBLAS=1
-pip install . --verbose --force-reinstall --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu129
-cd ..
-```
-
-### 4. Install PyTorch with CUDA
-
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-```
-
-### 5. Install Triton (Windows)
-
-```bash
-pip install -U "triton-windows<3.4"
-```
-
-### 6. Install Python Dependencies
+### 2. Python dependencies
 
 ```bash
 pip install -r requirements.txt
+pip install pydantic-settings
 ```
 
-Or install all at once:
+The Settings class uses `pydantic-settings`; install it explicitly if it is not already pinned in `requirements.txt`.
 
-```bash
-pip install "fastapi[standard]" uvicorn python-dotenv openai typhoon-ocr pypdf \
-  langchain-core langchain sentence-transformers torch huggingface_hub \
-  transformers bitsandbytes accelerate langchain-community chromadb \
-  langchain-openai langchain_huggingface langgraph langchain_chroma
-```
+### 3. (Optional) Local LLM for the air-gapped profile
+
+Build `llama-cpp-python` with CUDA and drop a GGUF model into `models/`. See [app/services/llm_service.py](app/services/llm_service.py) for the legacy LlamaIndex reference that the `LlamaCppLocalProvider` port will replace.
 
 ---
 
 ## Configuration
 
-Create a `.env` file in the project root with the following variables:
+Create a `.env` file in the project root:
 
 ```env
-# Debug mode
-DEBUG=true
+# --- Auth & CORS ---
+API_KEY="generate-a-secret-at-least-16-chars"
+CORS_ORIGINS=["http://localhost:3000","https://sdd.chatbordin.com"]
 
-# HuggingFace token (for model downloads)
-HF_TOKEN="hf_your_token_here"
+# --- Runtime profile ---
+LLM_PROFILE=cloud           # one of: cloud | local
+DEBUG=false
 
-# OpenAI API key (for GPT-4o-mini)
-OPENAI_API_KEY="sk-proj-your-openai-key-here"
+# --- Cloud-profile secrets ---
+OPENAI_API_KEY="sk-proj-..."
+
+# --- OCR ingestion (only needed when running build_index) ---
+TYHOON_API_KEY="sk-..."
+HF_TOKEN="hf_..."
+
+# --- Optional overrides (defaults shown) ---
+# DATASET_NAME=sdd-data
+# CHROMA_DIR=storage/chroma_data
+# SQLITE_PATH=storage/app.sqlite3
+# LLM_MODEL=gpt-4o-mini
+# LLM_PROVIDER=openai
+# EMBEDDING_MODEL=BAAI/bge-m3
+# RETRIEVAL_K=2
+# CHUNK_SIZE=3000
+# CHUNK_OVERLAP=1000
+# MAX_INPUT_CHARS=4000
 ```
 
-### Required API Keys
+`Settings` validates these at startup and **fails fast** if:
+- `API_KEY` is missing or shorter than 16 characters
+- `LLM_PROFILE=cloud` and `OPENAI_API_KEY` is unset
+- `LLM_PROFILE` is anything other than `cloud` or `local`
 
-| Key              | Purpose                                  | Provider                                          |
-| ---------------- | ---------------------------------------- | ------------------------------------------------- |
-| `HF_TOKEN`       | Download embedding models from HuggingFace | [huggingface.co](https://huggingface.co)          |
-| `OPENAI_API_KEY` | GPT-4o-mini for response generation       | [platform.openai.com](https://platform.openai.com) |
+Required API keys:
 
-> **Note:** Typhoon OCR API key (`TYHOON_API_KEY`) is no longer required. OCR is now handled offline via Ollama.
+| Key              | Used by                              | Provider                                          |
+| ---------------- | ------------------------------------ | ------------------------------------------------- |
+| `API_KEY`        | Client auth (`X-API-Key` header)     | You — generate and rotate per environment         |
+| `OPENAI_API_KEY` | Cloud LLM profile                    | [platform.openai.com](https://platform.openai.com)|
+| `TYHOON_API_KEY` | OCR ingestion                        | [opentyphoon.ai](https://api.opentyphoon.ai)      |
+| `HF_TOKEN`       | HuggingFace embedding model download | [huggingface.co](https://huggingface.co)          |
 
 ---
 
 ## Running the Server
 
-### Development
+The API requires a built vector index. If `storage/chroma_data/` does not exist, run the ingestion CLI first ([Building the Vector Index](#building-the-vector-index)).
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Or using FastAPI CLI:
+Endpoints:
+
+- API docs (Swagger): `http://localhost:8000/docs`
+- Health: `http://localhost:8000/healthz` → `{"status": "ok", "ready": true}` once startup completes
+- Root: `http://localhost:8000/`
+
+The lifespan hook builds the LangGraph after startup, so cold-start latency is bounded by the embedding-model load and Chroma open — not by OCR.
+
+---
+
+## Building the Vector Index
+
+OCR + chunking + embedding is now a separate offline job. Drop new PDFs into `data/sdd-data/` and run:
 
 ```bash
-fastapi dev app/main.py
+# First-time build (or whenever the corpus changes):
+python -m app.ingestion.build_index --rebuild
+
+# Custom directories:
+python -m app.ingestion.build_index --source data/standards --ocr-out data/standards_json --rebuild
 ```
 
-The server will start at: **http://localhost:8000**
+Flags:
 
-### Interactive API Docs
+| Flag         | Purpose                                                          |
+| ------------ | ---------------------------------------------------------------- |
+| `--source`   | Directory of source PDFs (default `data/sdd-data`)               |
+| `--ocr-out`  | Where to write OCR JSON cache (default `data/sdd-data_json`)     |
+| `--rebuild`  | Force re-indexing even if `CHROMA_DIR` already exists            |
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+OCR JSONs are cached on disk; rerunning is idempotent for files that have already been processed.
 
-> **Note**: All endpoints require a `token` query parameter (e.g., `?token=jessica`).
+> **Offline OCR alternative:** [scripts/run_local_ocr.py](scripts/run_local_ocr.py) (Ollama + PyMuPDF) is available for environments where the Typhoon OCR API cannot be reached. The resulting JSONs are consumed by `build_index` exactly as if they came from Typhoon.
 
 ---
 
 ## API Reference
 
-### Health Check
+All API endpoints (except `/`, `/healthz`, and `/docs`) require:
+
+```
+X-API-Key: <your API_KEY>
+```
+
+The legacy `?token=jessica` query parameter is **removed**.
+
+### Health
 
 ```http
-GET /?token=jessica
+GET /healthz
 ```
 
-**Response:**
 ```json
-{
-  "message": "Hello Bigger Applications!"
-}
+{ "status": "ok", "ready": true }
 ```
-
----
 
 ### Chat — Streaming QA
 
 ```http
-GET /qa/stream?input_message={question}&token=jessica
+POST /qa/stream
+Content-Type: application/json
+X-API-Key: <your API_KEY>
+
+{
+  "input_message": "มาตรฐานการออกแบบสถานีไฟฟ้า 115kV คืออะไร",
+  "session_id": "optional-session-id"
+}
 ```
 
-**Parameters:**
+**Response:** `text/event-stream` (Server-Sent Events).
 
-| Parameter       | Type   | Required | Description                      |
-| --------------- | ------ | -------- | -------------------------------- |
-| `input_message` | string | ✅       | The question to ask the AI       |
-| `token`         | string | ✅       | Authentication token (`jessica`) |
+**Validation:**
+- `input_message` must be non-empty and ≤ `MAX_INPUT_CHARS` characters (default 4000). Oversize requests get `413 Request Entity Too Large`.
+- The endpoint returns `503` if the vector index has not been built yet.
 
-**Response:** `text/event-stream` (Server-Sent Events)
+**Event types:**
 
-**Event Types:**
+| Event                | Data schema                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `message_chunk`      | `{ "type": "ai_chunk", "content": "...", "metadata": {} }`             |
+| `tool_message`       | `{ "type": "tool_message", "content": "...", "name": "retrieve", "metadata": {} }` |
+| `end_of_ai_response` | `{ "metadata": {} }`                                                   |
+| `error`              | `{ "type": "error", "message": "internal_error" }`                     |
+| `stream_end`         | `{}`                                                                   |
 
-| Event             | Description                           | Data Schema                                              |
-| ----------------- | ------------------------------------- | -------------------------------------------------------- |
-| `message_chunk`   | Streamed AI response token            | `{ "type": "ai_chunk", "content": "...", "metadata": {} }` |
-| `tool_message`    | Tool execution result (retrieval)     | `{ "type": "tool_message", "content": "...", "name": "retrieve", "metadata": {} }` |
-| `stream_end`      | End of stream marker                  | `{}`                                                     |
-
-**Example (cURL):**
+**cURL:**
 
 ```bash
-curl -N "http://localhost:8000/qa/stream?input_message=มาตรฐานการออกแบบสถานีไฟฟ้า+115kV+คืออะไร&token=jessica"
+curl -N -X POST http://localhost:8000/qa/stream \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input_message":"มาตรฐาน สถานีไฟฟ้า 115kV"}'
 ```
 
-**Example (JavaScript EventSource):**
+**Browser (`fetch` + `ReadableStream`):**
+
+Native `EventSource` is GET-only and cannot send headers, so the frontend must use `fetch`:
 
 ```javascript
-const eventSource = new EventSource(
-  'http://localhost:8000/qa/stream?input_message=มาตรฐาน+สถานีไฟฟ้า&token=jessica'
-);
-
-eventSource.addEventListener('message_chunk', (event) => {
-  const data = JSON.parse(event.data);
-  console.log(data.content); // AI response tokens
+const res = await fetch("http://localhost:8000/qa/stream", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": import.meta.env.VITE_API_KEY,
+  },
+  body: JSON.stringify({ input_message: "มาตรฐาน สถานีไฟฟ้า 115kV" }),
 });
 
-eventSource.addEventListener('stream_end', () => {
-  eventSource.close();
-});
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  // SSE frames: split on "\n\n", parse "event:" / "data:" lines as needed.
+  console.log(decoder.decode(value));
+}
 ```
+
+Client disconnects are honored — the server cancels the LangGraph run on the next chunk boundary.
 
 ---
 
-## Core Services
-
-### `langgraph_service.py` — Online RAG Pipeline (Active)
-
-The primary service powering the AI chatbot. Loads pre-processed JSON files and runs the RAG pipeline:
-
-| Component              | Description                                                                 |
-| ---------------------- | --------------------------------------------------------------------------- |
-| **Document Loading**   | Reads pre-processed JSON files from `data/sdd-data_json/` (no cloud API)   |
-| **Text Splitting**     | `RecursiveCharacterTextSplitter` with 3000-token chunks and 1000 overlap    |
-| **Embedding**          | `BAAI/bge-m3` model (GPU-accelerated via HuggingFace)                      |
-| **Vector Store**       | ChromaDB with persistent storage at `storage/chroma_data/`                  |
-| **Retrieval**          | Similarity search returning top 2 relevant document chunks                  |
-| **LLM Generation**     | GPT-4o-mini via OpenAI API, responses in Thai language                      |
-| **Query Logging**      | All user queries saved to SQLite at `storage/app.sqlite3`                   |
-
-### `scripts/run_local_ocr.py` — Offline OCR Ingestion
-
-Standalone script that processes PDFs into structured JSON files using a local Ollama vision model:
+## Testing
 
 ```bash
-# Process all PDFs with default model (qwen2.5-vl)
-python scripts/run_local_ocr.py
-
-# Use a specific model
-python scripts/run_local_ocr.py --model llama3-typhoon-vision
-
-# Re-process already-converted files
-python scripts/run_local_ocr.py --force
-
-# Process a different directory
-python scripts/run_local_ocr.py --pdf-dir data/standards --json-dir data/standards_json
+pytest -q
 ```
 
-**Page Processing Rules:**
+The suite uses `FakeListChatModel` and an in-memory `FakeVectorStoreRepository` (see [tests/fakes.py](tests/fakes.py)), so it runs **without** network, GPU, or a built Chroma index.
 
-| Rule | Behavior |
-|------|----------|
-| **A4 pages only** | Pages with longest edge > 1,000pt are identified as A3 or larger engineering drawings and **skipped automatically**. Only A4-sized pages (longest edge ≈ 842pt) are processed. |
-| **Auto-rotation** | Pages with non-zero `/Rotate` metadata (90°, 180°, 270°) are **de-rotated to upright** before rendering, ensuring the vision model receives correctly oriented images. |
-| **Early stop** | Processing stops when the Thai closing phrase "จึงเรียน" is detected, as it marks the end of the document body. |
-
-### `llm_service.py` — Local LLM Pipeline (Deprecated)
-
-An alternative pipeline using **LlamaIndex** with a local GGUF model. Currently **commented out** and not in active use.
+What's covered today:
+- Health and API-key auth ([tests/test_health_and_auth.py](tests/test_health_and_auth.py))
+- `QAService.astream` end-to-end with fakes ([tests/test_qa_service.py](tests/test_qa_service.py))
+- SQLite query log writes and indexing ([tests/test_query_log.py](tests/test_query_log.py))
 
 ---
 
-## Data Pipeline
+## Deployment Profiles
 
-### Decoupled Architecture
-
-The system uses a **two-phase** approach:
-
-#### Phase 1 — Offline Ingestion (`scripts/run_local_ocr.py`)
-
-1. **Source PDFs** are placed in `data/sdd-data/` (or `data/standards/`)
-2. **OCR Processing** (runs locally via Ollama — no cloud API):
-   - Each PDF page is rendered to a base64 PNG image using PyMuPDF
-   - The image is sent to a local Ollama vision model (e.g., `qwen2.5-vl`)
-   - The model extracts text and tables as Markdown
-   - Results are saved as JSON in `data/sdd-data_json/`
-
-#### Phase 2 — Online Serving (FastAPI server)
-
-3. **JSON Loading**: Pre-processed JSON files are loaded at server startup
-4. **Chunking**: Text is split using TikToken-based chunking (3000 tokens, 1000 overlap)
-5. **Embedding**: Chunks are embedded using `BAAI/bge-m3` model
-6. **Storage**: Vectors are stored in ChromaDB at `storage/chroma_data/`
-7. **On first query**: If no existing vector store is found, embeddings are generated automatically
-
-### Known Problematic Files
-
-Some PDF files are skipped during OCR processing due to formatting issues:
-
-- `สถานีไฟฟ้าลำลูกกา 3 (คพจ.2).pdf`
-- `สฟ.ปากท่อ 2 (อนุมัติ + แบบ).pdf`
-- `อนุมัติ อุบล 5.pdf`
-- `สำเนาอนุมัติแบบและค่าใช้จ่ายสฟ.กันทรวิชัย.pdf`
-
----
-
-## CORS Configuration
-
-The following origins are allowed:
-
-| Origin                                    | Description          |
-| ----------------------------------------- | -------------------- |
-| `http://localhost:3000`                    | Local frontend dev   |
-| `https://sdd.chatbordin.com`              | Production frontend  |
-| `http://sdd.chatbordin.com`               | Production (HTTP)    |
-| `https://ssd-web-beta.vercel.app`         | Beta frontend        |
-| `https://sdd-nonggof-reverse.chatbordin.com` | Reverse proxy     |
-
----
-
-## Deployment Targets
-
-| Target                         | Status       |
-| ------------------------------ | ------------ |
-| 🌐 Intranet Web Application    | ✅ Active    |
-| 💬 Line Chatbot                | 🔧 Planned  |
-| 🏢 Internal Knowledge Assistant | 🔧 Planned  |
-
----
-
-## Key Features
-
-- 🔍 **Semantic Search** — Find relevant information from standard documents using vector similarity
-- 🤖 **AI-powered QA** — Natural language answers in Thai, grounded in actual documents
-- 📄 **Document-based Responses** — All answers are backed by retrieved document context
-- 🌊 **Streaming Responses** — Real-time token streaming via Server-Sent Events (SSE)
-- 📝 **Query Logging** — All user queries are persisted for analytics and improvement
-- 🔄 **Automatic Embedding** — Vector store is built automatically on first run
-- 🎯 **GPU Acceleration** — CUDA-powered embedding inference for fast processing
-
----
-
-## Benefits
-
-- ⏱️ ลดเวลาค้นหาเอกสาร — Reduce document search time
-- 🛡️ ลด Human Error — Minimize human errors in referencing
-- 📈 เพิ่ม Productivity — Increase engineering productivity
-- 🔄 สนับสนุน Digital Transformation — Support organizational digital transformation
-- 🏗️ พัฒนาเป็น Enterprise Knowledge Platform ได้ — Scalable to enterprise knowledge platform
+| Target                              | LLM Profile | Notes                                                               |
+| ----------------------------------- | ----------- | ------------------------------------------------------------------- |
+| 🌐 Intranet web app *(active)*      | `cloud`     | OpenAI-fronted, behind PEA's reverse proxy                          |
+| 🏢 Air-gapped intranet *(planned)*  | `local`     | Wire `LlamaCppLocalProvider`; port logic from [app/services/llm_service.py](app/services/llm_service.py) |
+| 💬 LINE chatbot *(planned)*         | `cloud`     | Same backend, separate LINE-webhook adapter on the frontend         |
 
 ---
 
