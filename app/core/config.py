@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # LLM provider: "cloud" = OpenAI API, "local" = Ollama
     LLM_PROFILE: Literal["cloud", "local"] = "local"
     LLM_MODEL: str = "qwen2.5:32b"  # Ollama model name or OpenAI model name
+    # Per-request timeout for the LLM call. Bounds a hung/wedged backend
+    # (e.g. an Ollama server that accepts the connection but never spawns a
+    # runner) so the generate node raises instead of blocking forever. Must
+    # be generous enough for a cold model load + slow generation.
+    LLM_TIMEOUT_SECONDS: float = 180.0
 
     # Embeddings: "ollama" = via Ollama server, "huggingface" = via PyTorch
     EMBEDDING_PROFILE: Literal["ollama", "huggingface"] = "ollama"

@@ -32,4 +32,9 @@ class OllamaChatProvider:
             model=self._settings.LLM_MODEL,
             base_url=self._settings.OLLAMA_HOST,
             temperature=0,
+            # Bound the underlying httpx request so a wedged Ollama server
+            # (connection accepted, no runner spawned) raises a read timeout
+            # instead of hanging the generate node forever. Applies to the
+            # sync client used by llm.invoke().
+            client_kwargs={"timeout": self._settings.LLM_TIMEOUT_SECONDS},
         )

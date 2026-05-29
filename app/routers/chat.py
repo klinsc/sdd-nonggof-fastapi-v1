@@ -2,6 +2,7 @@ import json
 import logging
 import time
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, ToolMessage
@@ -40,6 +41,22 @@ def _get_qa(request: Request) -> QAService:
 
 def _get_query_log(request: Request) -> QueryLogRepository | None:
     return getattr(request.app.state, "query_log", None)
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """True if exc (or anything in its cause chain) is a request timeout.
+
+    Covers a wedged/slow LLM backend whose request exceeds
+    ``LLM_TIMEOUT_SECONDS`` — httpx raises ``TimeoutException`` (e.g.
+    ``ReadTimeout``); the stdlib ``TimeoutError`` is included for parity.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 @router.post("/stream")
@@ -103,9 +120,25 @@ async def chat_stream(
                     }
                     yield f"event: tool_message\ndata: {json.dumps(data)}\n\n"
         except Exception as exc:
-            logger.exception("Error while streaming graph response: %s", exc)
-            err = {"type": "error", "message": "internal_error"}
-            yield f"event: error\ndata: {json.dumps(err)}\n\n"
+            if _is_timeout(exc):
+                logger.error(
+                    "LLM request timed out after %.0fs: %s",
+                    settings.LLM_TIMEOUT_SECONDS,
+                    exc,
+                )
+                err = {
+                    "type": "error",
+                    "code": "llm_timeout",
+                    "message": (
+                        "ระบบใช้เวลาประมวลผลนานเกินกำหนด "
+                        "(โมเดลอาจกำลังโหลดหรือเซิร์ฟเวอร์ไม่ตอบสนอง) "
+                        "กรุณาลองใหม่อีกครั้ง"
+                    ),
+                }
+            else:
+                logger.exception("Error while streaming graph response: %s", exc)
+                err = {"type": "error", "code": "internal_error", "message": "internal_error"}
+            yield f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
             return
 
         # Per-query stats: tokens (when Ollama reports them), wall time,

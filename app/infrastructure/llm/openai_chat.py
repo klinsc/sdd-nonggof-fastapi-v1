@@ -18,5 +18,7 @@ class OpenAIChatProvider:
         if not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is required for the openai LLM profile.")
         return init_chat_model(
-            self._settings.LLM_MODEL, model_provider="openai"
+            self._settings.LLM_MODEL,
+            model_provider="openai",
+            timeout=self._settings.LLM_TIMEOUT_SECONDS,
         )
