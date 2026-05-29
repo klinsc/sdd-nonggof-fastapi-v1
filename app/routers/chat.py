@@ -139,6 +139,9 @@ async def chat_stream(
                 logger.exception("Error while streaming graph response: %s", exc)
                 err = {"type": "error", "code": "internal_error", "message": "internal_error"}
             yield f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
+            # Terminate symmetrically so SSE clients close cleanly instead of
+            # seeing an unexpected EOF (which can trigger auto-reconnect).
+            yield "event: stream_end\ndata: {}\n\n"
             return
 
         # Per-query stats: tokens (when Ollama reports them), wall time,
