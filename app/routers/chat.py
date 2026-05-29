@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,7 @@ from app.application.qa_service import QAService
 from app.application.ports import QueryLogRepository
 from app.core.config import get_settings
 from app.dependencies import require_api_key
+from app.infrastructure import system_stats
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,9 @@ async def chat_stream(
         )
 
     async def event_generator():
+        t0 = time.perf_counter()
+        final_usage: dict | None = None
+        completion_chars = 0
         try:
             async for message_token, metadata in qa.astream(payload.input_message):
                 if await request.is_disconnected():
@@ -70,12 +75,19 @@ async def chat_stream(
                     break
 
                 if isinstance(message_token, AIMessage):
+                    um = getattr(message_token, "usage_metadata", None)
+                    if um:
+                        # langchain returns usage_metadata as TypedDict-like.
+                        # Keep the latest non-empty record (Ollama emits it on
+                        # the final chunk).
+                        final_usage = dict(um)
                     if getattr(message_token, "type", None) == "final_response":
                         yield (
                             f"event: end_of_ai_response\n"
                             f"data: {json.dumps({'metadata': metadata})}\n\n"
                         )
                     elif getattr(message_token, "content", None):
+                        completion_chars += len(message_token.content)
                         data = {
                             "type": "ai_chunk",
                             "content": message_token.content,
@@ -95,6 +107,28 @@ async def chat_stream(
             err = {"type": "error", "message": "internal_error"}
             yield f"event: error\ndata: {json.dumps(err)}\n\n"
             return
+
+        # Per-query stats: tokens (when Ollama reports them), wall time,
+        # completion size, and a snapshot of system resources at the end of
+        # the stream. Best-effort — never block stream_end on this.
+        try:
+            duration_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            stats_payload = {
+                "duration_ms": duration_ms,
+                "input_chars": len(payload.input_message),
+                "completion_chars": completion_chars,
+                "tokens": {
+                    "prompt": final_usage.get("input_tokens") if final_usage else None,
+                    "completion": final_usage.get("output_tokens") if final_usage else None,
+                    "total": final_usage.get("total_tokens") if final_usage else None,
+                },
+                "cpu": system_stats.get_cpu_stats(),
+                "memory": system_stats.get_memory_stats(),
+                "gpus": system_stats.get_gpu_stats(),
+            }
+            yield f"event: stats\ndata: {json.dumps(stats_payload)}\n\n"
+        except Exception as exc:
+            logger.warning("failed to emit stats event: %s", exc)
 
         yield "event: stream_end\ndata: {}\n\n"
 

@@ -42,6 +42,12 @@
     .meta { font-size: .75rem; opacity: .55; margin-top: .25rem; }
     .cursor::after { content: "▍"; animation: blink 1s steps(2) infinite; opacity: .5; }
     @keyframes blink { 50% { opacity: 0; } }
+    #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .5rem; margin-top: .75rem; padding: .6rem .75rem; border: 1px solid #ddd; border-radius: 6px; font-size: .8rem; background: rgba(0,0,0,.02); }
+    #stats h3 { margin: 0 0 .35rem; font-size: .75rem; text-transform: uppercase; letter-spacing: .03em; opacity: .6; font-weight: 600; }
+    #stats .stat-block { line-height: 1.45; }
+    #stats .stat-block .v { font-family: ui-monospace, monospace; font-size: .82rem; }
+    #stats .stat-block .label { opacity: .65; margin-right: .35em; }
+    #stats.empty { opacity: .4; font-style: italic; }
   </style>
 </head>
 <body>
@@ -64,6 +70,8 @@
     <button id="send">Send</button>
     <button id="clear">Clear</button>
   </div>
+
+  <div id="stats" class="empty">No stats yet — send a query to populate.</div>
 
   <div class="meta" id="status">Ready. Session: <span id="sessionId"></span></div>
 
@@ -95,8 +103,56 @@ const statusEl = $('status');
   });
 });
 
+const statsEl = $('stats');
 const sessionId = (crypto.randomUUID && crypto.randomUUID()) || ('s_' + Date.now());
 $('sessionId').textContent = sessionId;
+
+function renderStats(s) {
+  if (!s) { statsEl.classList.add('empty'); statsEl.textContent = 'No stats yet — send a query to populate.'; return; }
+  statsEl.classList.remove('empty');
+  const blocks = [];
+  // Tokens / timing
+  const tk = s.tokens || {};
+  blocks.push(`
+    <div class="stat-block">
+      <h3>Query</h3>
+      <div><span class="label">duration</span><span class="v">${s.duration_ms} ms</span></div>
+      <div><span class="label">prompt tokens</span><span class="v">${tk.prompt ?? '—'}</span></div>
+      <div><span class="label">completion tokens</span><span class="v">${tk.completion ?? '—'}</span></div>
+      <div><span class="label">total tokens</span><span class="v">${tk.total ?? '—'}</span></div>
+      <div><span class="label">input chars</span><span class="v">${s.input_chars}</span></div>
+      <div><span class="label">output chars</span><span class="v">${s.completion_chars}</span></div>
+    </div>`);
+  // CPU
+  blocks.push(`
+    <div class="stat-block">
+      <h3>CPU</h3>
+      <div><span class="label">utilization</span><span class="v">${s.cpu.percent.toFixed(1)}%</span></div>
+      <div><span class="label">cores</span><span class="v">${s.cpu.count}</span></div>
+    </div>`);
+  // RAM
+  blocks.push(`
+    <div class="stat-block">
+      <h3>RAM</h3>
+      <div><span class="label">used</span><span class="v">${s.memory.used_gb} / ${s.memory.total_gb} GB</span></div>
+      <div><span class="label">percent</span><span class="v">${s.memory.percent}%</span></div>
+    </div>`);
+  // GPU(s)
+  if (Array.isArray(s.gpus) && s.gpus.length > 0) {
+    for (const g of s.gpus) {
+      blocks.push(`
+        <div class="stat-block">
+          <h3>GPU ${g.index} · ${escapeHtml(g.name)}</h3>
+          <div><span class="label">utilization</span><span class="v">${g.utilization_percent.toFixed(0)}%</span></div>
+          <div><span class="label">vram</span><span class="v">${g.memory_used_gb} / ${g.memory_total_gb} GB (${g.memory_percent}%)</span></div>
+          <div><span class="label">temp</span><span class="v">${g.temperature_c != null ? g.temperature_c.toFixed(0) + '°C' : '—'}</span></div>
+        </div>`);
+    }
+  } else {
+    blocks.push(`<div class="stat-block"><h3>GPU</h3><div class="v">(NVML unavailable)</div></div>`);
+  }
+  statsEl.innerHTML = blocks.join('');
+}
 
 let history = [];
 let streaming = false;
@@ -198,6 +254,8 @@ async function sendQuery() {
         } else if (eventType === 'tool_message' && data) {
           assistantMsg.content += `\n[tool: ${data.name || '?'}] ${data.content || ''}\n`;
           render();
+        } else if (eventType === 'stats' && data) {
+          renderStats(data);
         } else if (eventType === 'error') {
           assistantMsg.content += `\n[server error] ${dataStr}`;
           assistantMsg.error = true;

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.lifespan import lifespan
 from app.core.logging import request_id_ctx
-from app.routers import chat
+from app.routers import chat, stats
 
 settings = get_settings()
 
@@ -37,6 +37,7 @@ async def request_id_middleware(request: Request, call_next):
 
 
 app.include_router(chat.router)
+app.include_router(stats.router)
 
 
 @app.get("/")
