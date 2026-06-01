@@ -13,6 +13,11 @@ settings = get_settings()
 app = FastAPI(
     title="น้องกอฟ — PEA SDD AI Assistant",
     lifespan=lifespan,
+    # Don't expose interactive docs / OpenAPI schema publicly in production;
+    # enable them only when DEBUG is on.
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 app.add_middleware(
