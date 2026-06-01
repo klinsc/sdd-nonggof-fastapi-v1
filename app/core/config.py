@@ -57,6 +57,11 @@ class Settings(BaseSettings):
 
     MAX_INPUT_CHARS: int = 4000
 
+    # Abuse guard: max POST /qa/stream requests per client per minute. The
+    # endpoint drives expensive GPU inference, so this bounds how fast any one
+    # client can spend it. See app/core/rate_limit.py.
+    RATE_LIMIT_QA_PER_MIN: int = 20
+
     @model_validator(mode="after")
     def _coerce_ollama_host(self) -> "Settings":
         # Shells often export OLLAMA_HOST=0.0.0.0 (the `ollama serve` bind

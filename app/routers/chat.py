@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.application.qa_service import QAService
 from app.application.ports import QueryLogRepository
 from app.core.config import get_settings
+from app.core.rate_limit import rate_limit_qa
 from app.dependencies import require_api_key
 from app.infrastructure import system_stats
 
@@ -59,7 +60,7 @@ def _is_timeout(exc: BaseException) -> bool:
     return False
 
 
-@router.post("/stream")
+@router.post("/stream", dependencies=[Depends(rate_limit_qa)])
 async def chat_stream(
     payload: ChatRequest, request: Request, background: BackgroundTasks
 ):
